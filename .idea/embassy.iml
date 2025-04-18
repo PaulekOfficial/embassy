@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/embassy-at-cmux/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-embedded-hal/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-executor/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-executor/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-futures/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-net-driver-channel/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-net-driver/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-net/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-nrf/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-rp/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-stm32/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-sync/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-time/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-usb-driver/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-usb-logger/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/embassy-usb/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/application/nrf/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/application/rp/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/application/stm32f3/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/application/stm32f7/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/application/stm32h7/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/application/stm32l0/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/application/stm32l1/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/application/stm32l4/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/application/stm32wl/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/bootloader/nrf/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/bootloader/rp/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/boot/bootloader/stm32/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/nrf-rtos-trace/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/nrf52840/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/nrf5340/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/rp/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/std/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32c0/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32f0/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32f1/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32f2/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32f3/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32f4/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32f7/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32g0/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32g4/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32h7/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32l0/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32l1/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32l4/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32l5/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32u5/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32wb/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32wl/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/wasm/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/stm32-data/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/stm32-data/stm32-data-serde/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/tests/nrf/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/tests/rp/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/tests/stm32/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-at-cmux/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-embedded-hal/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-executor/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-futures/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-net-driver-channel/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-net-driver/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-net/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-nrf/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-rp/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-stm32/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-sync/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-time/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-usb-driver/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-usb-logger/target" />
+      <excludeFolder url="file://$MODULE_DIR$/embassy-usb/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/application/nrf/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/application/rp/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/application/stm32f3/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/application/stm32f7/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/application/stm32h7/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/application/stm32l0/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/application/stm32l1/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/application/stm32l4/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/application/stm32wl/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/bootloader/nrf/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/bootloader/rp/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/boot/bootloader/stm32/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/nrf-rtos-trace/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/nrf52840/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/nrf5340/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/rp/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/std/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32c0/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32f0/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32f1/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32f2/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32f3/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32f4/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32f7/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32g0/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32g4/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32h7/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32l0/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32l1/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32l4/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32l5/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32u5/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32wb/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32wl/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/wasm/target" />
+      <excludeFolder url="file://$MODULE_DIR$/stm32-data/stm32-data-serde/target" />
+      <excludeFolder url="file://$MODULE_DIR$/stm32-data/target" />
+      <excludeFolder url="file://$MODULE_DIR$/tests/nrf/target" />
+      <excludeFolder url="file://$MODULE_DIR$/tests/rp/target" />
+      <excludeFolder url="file://$MODULE_DIR$/tests/stm32/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>
