@@ -13,13 +13,17 @@ pub(crate) unsafe fn on_interrupt<T: Instance>() {
     let regs = T::info().regs;
     let isr = regs.isr().read();
 
-    if isr.tcr() || isr.tc() {
+    if isr.tcr() || isr.tc() || isr.nackf() || isr.berr() || isr.arlo() || isr.ovr() {
         T::state().waker.wake();
     }
-    // The flag can only be cleared by writting to nbytes, we won't do that here, so disable
-    // the interrupt
     critical_section::with(|_| {
-        regs.cr1().modify(|w| w.set_tcie(false));
+        regs.cr1().modify(|w| {
+            // The flag can only be cleared by writting to nbytes, we won't do that here
+            w.set_tcie(false);
+            // Error flags are to be read in the routines, so we also don't clear them here
+            w.set_nackie(false);
+            w.set_errie(false);
+        });
     });
 }
 
@@ -450,6 +454,8 @@ impl<'d> I2c<'d, Async> {
                 if first_slice {
                     w.set_tcie(true);
                 }
+                w.set_nackie(true);
+                w.set_errie(true);
             });
             let dst = regs.txdr().as_ptr() as *mut u8;
 
@@ -460,18 +466,41 @@ impl<'d> I2c<'d, Async> {
 
         let on_drop = OnDrop::new(|| {
             let regs = self.info.regs;
+            let isr = regs.isr().read();
             regs.cr1().modify(|w| {
-                if last_slice {
+                if last_slice || isr.nackf() || isr.arlo() || isr.berr() || isr.ovr() {
                     w.set_txdmaen(false);
                 }
                 w.set_tcie(false);
-            })
+                w.set_nackie(false);
+                w.set_errie(false);
+            });
+            regs.icr().write(|w| {
+                w.set_nackcf(true);
+                w.set_berrcf(true);
+                w.set_arlocf(true);
+                w.set_ovrcf(true);
+            });
         });
 
         poll_fn(|cx| {
             self.state.waker.register(cx.waker());
 
             let isr = self.info.regs.isr().read();
+
+            if isr.nackf() {
+                return Poll::Ready(Err(Error::Nack));
+            }
+            if isr.arlo() {
+                return Poll::Ready(Err(Error::Arbitration));
+            }
+            if isr.berr() {
+                return Poll::Ready(Err(Error::Bus));
+            }
+            if isr.ovr() {
+                return Poll::Ready(Err(Error::Overrun));
+            }
+
             if remaining_len == total_len {
                 if first_slice {
                     Self::master_write(
@@ -534,6 +563,8 @@ impl<'d> I2c<'d, Async> {
             regs.cr1().modify(|w| {
                 w.set_rxdmaen(true);
                 w.set_tcie(true);
+                w.set_nackie(true);
+                w.set_errie(true);
             });
             let src = regs.rxdr().as_ptr() as *mut u8;
 
@@ -547,13 +578,35 @@ impl<'d> I2c<'d, Async> {
             regs.cr1().modify(|w| {
                 w.set_rxdmaen(false);
                 w.set_tcie(false);
-            })
+                w.set_nackie(false);
+                w.set_errie(false);
+            });
+            regs.icr().write(|w| {
+                w.set_nackcf(true);
+                w.set_berrcf(true);
+                w.set_arlocf(true);
+                w.set_ovrcf(true);
+            });
         });
 
         poll_fn(|cx| {
             self.state.waker.register(cx.waker());
 
             let isr = self.info.regs.isr().read();
+
+            if isr.nackf() {
+                return Poll::Ready(Err(Error::Nack));
+            }
+            if isr.arlo() {
+                return Poll::Ready(Err(Error::Arbitration));
+            }
+            if isr.berr() {
+                return Poll::Ready(Err(Error::Bus));
+            }
+            if isr.ovr() {
+                return Poll::Ready(Err(Error::Overrun));
+            }
+
             if remaining_len == total_len {
                 Self::master_read(
                     self.info,
@@ -564,9 +617,10 @@ impl<'d> I2c<'d, Async> {
                     restart,
                     timeout,
                 )?;
-            } else if remaining_len == 0 {
-                return Poll::Ready(Ok(()));
-            } else if !(isr.tcr() || isr.tc()) {
+                if total_len <= 255 {
+                    return Poll::Ready(Ok(()));
+                }
+            } else if isr.tcr() {
                 // poll_fn was woken without an interrupt present
                 return Poll::Pending;
             } else {
@@ -574,6 +628,11 @@ impl<'d> I2c<'d, Async> {
 
                 if let Err(e) = Self::master_continue(self.info, remaining_len.min(255), !last_piece, timeout) {
                     return Poll::Ready(Err(e));
+                }
+                // Return here if we are on last chunk,
+                // end of transfer will be awaited with the DMA below
+                if last_piece {
+                    return Poll::Ready(Ok(()));
                 }
                 self.info.regs.cr1().modify(|w| w.set_tcie(true));
             }
@@ -802,13 +861,22 @@ impl<'d, M: Mode> SetConfig for I2c<'d, M> {
     type Config = Hertz;
     type ConfigError = ();
     fn set_config(&mut self, config: &Self::Config) -> Result<(), ()> {
+        self.info.regs.cr1().modify(|reg| {
+            reg.set_pe(false);
+        });
+
         let timings = Timings::new(self.kernel_clock, *config);
+
         self.info.regs.timingr().write(|reg| {
             reg.set_presc(timings.prescale);
             reg.set_scll(timings.scll);
             reg.set_sclh(timings.sclh);
             reg.set_sdadel(timings.sdadel);
             reg.set_scldel(timings.scldel);
+        });
+
+        self.info.regs.cr1().modify(|reg| {
+            reg.set_pe(true);
         });
 
         Ok(())

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.4.0 - 2025-03-09
+
+- Add PIO functions. ([#3857](https://github.com/embassy-rs/embassy/pull/3857))  
+  The functions added in this change are `get_addr` `get_tx_threshold`, `set_tx_threshold`, `get_rx_threshold`, `set_rx_threshold`, `set_thresholds`.
+- Expose the watchdog reset reason. ([#3877](https://github.com/embassy-rs/embassy/pull/3877))
+- Update pio-rs, reexport, move instr methods to SM. ([#3865](https://github.com/embassy-rs/embassy/pull/3865))
+- rp235x: add ImageDef features. ([#3890](https://github.com/embassy-rs/embassy/pull/3890))
+- doc: Fix "the the" ([#3903](https://github.com/embassy-rs/embassy/pull/3903))
+- pio: Add access to DMA engine byte swapping ([#3935](https://github.com/embassy-rs/embassy/pull/3935))
+- Modify BufferedUart initialization to take pins before interrupts ([#3983](https://github.com/embassy-rs/embassy/pull/3983))
+
 ## 0.3.1 - 2025-02-06
 
 Small release fixing a few gnarly bugs, upgrading is strongly recommended.

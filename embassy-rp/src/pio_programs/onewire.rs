@@ -1,6 +1,7 @@
 //! OneWire pio driver
 
-use crate::pio::{self, Common, Config, Instance, LoadedProgram, PioPin, ShiftConfig, ShiftDirection, StateMachine};
+use crate::pio::{Common, Config, Instance, LoadedProgram, PioPin, ShiftConfig, ShiftDirection, StateMachine};
+use crate::Peri;
 
 /// This struct represents an onewire driver program
 pub struct PioOneWireProgram<'a, PIO: Instance> {
@@ -10,7 +11,7 @@ pub struct PioOneWireProgram<'a, PIO: Instance> {
 impl<'a, PIO: Instance> PioOneWireProgram<'a, PIO> {
     /// Load the program into the given pio
     pub fn new(common: &mut Common<'a, PIO>) -> Self {
-        let prg = pio_proc::pio_asm!(
+        let prg = pio::pio_asm!(
             r#"
                 .wrap_target
                     again:
@@ -60,16 +61,16 @@ impl<'a, PIO: Instance> PioOneWireProgram<'a, PIO> {
 }
 
 /// Pio backed OneWire driver
-pub struct PioOneWire<'d, PIO: pio::Instance, const SM: usize> {
+pub struct PioOneWire<'d, PIO: Instance, const SM: usize> {
     sm: StateMachine<'d, PIO, SM>,
 }
 
-impl<'d, PIO: pio::Instance, const SM: usize> PioOneWire<'d, PIO, SM> {
+impl<'d, PIO: Instance, const SM: usize> PioOneWire<'d, PIO, SM> {
     /// Create a new instance the driver
     pub fn new(
         common: &mut Common<'d, PIO>,
         mut sm: StateMachine<'d, PIO, SM>,
-        pin: impl PioPin,
+        pin: Peri<'d, impl PioPin>,
         program: &PioOneWireProgram<'d, PIO>,
     ) -> Self {
         let pin = common.make_pio_pin(pin);

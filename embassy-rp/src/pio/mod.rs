@@ -6,7 +6,7 @@ use core::sync::atomic::{compiler_fence, Ordering};
 use core::task::{Context, Poll};
 
 use atomic_polyfill::{AtomicU64, AtomicU8};
-use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use embassy_hal_internal::{Peri, PeripheralType};
 use embassy_sync::waitqueue::AtomicWaker;
 use fixed::types::extra::U8;
 use fixed::FixedU32;
@@ -18,7 +18,10 @@ use crate::interrupt::typelevel::{Binding, Handler, Interrupt};
 use crate::relocate::RelocatedProgram;
 use crate::{pac, peripherals, RegExt};
 
-pub mod instr;
+mod instr;
+
+#[doc(inline)]
+pub use pio as program;
 
 /// Wakers for interrupts and FIFOs.
 pub struct Wakers([AtomicWaker; 12]);
@@ -232,7 +235,7 @@ impl<'a, 'd, PIO: Instance> Drop for IrqFuture<'a, 'd, PIO> {
 
 /// Type representing a PIO pin.
 pub struct Pin<'l, PIO: Instance> {
-    pin: PeripheralRef<'l, AnyPin>,
+    pin: Peri<'l, AnyPin>,
     pio: PhantomData<PIO>,
 }
 
@@ -357,8 +360,9 @@ impl<'d, PIO: Instance, const SM: usize> StateMachineRx<'d, PIO, SM> {
     /// Prepare DMA transfer from RX FIFO.
     pub fn dma_pull<'a, C: Channel, W: Word>(
         &'a mut self,
-        ch: PeripheralRef<'a, C>,
+        ch: Peri<'a, C>,
         data: &'a mut [W],
+        bswap: bool,
     ) -> Transfer<'a, C> {
         let pio_no = PIO::PIO_NO;
         let p = ch.regs();
@@ -376,6 +380,7 @@ impl<'d, PIO: Instance, const SM: usize> StateMachineRx<'d, PIO, SM> {
             w.set_chain_to(ch.number());
             w.set_incr_read(false);
             w.set_incr_write(true);
+            w.set_bswap(bswap);
             w.set_en(true);
         });
         compiler_fence(Ordering::SeqCst);
@@ -444,7 +449,12 @@ impl<'d, PIO: Instance, const SM: usize> StateMachineTx<'d, PIO, SM> {
     }
 
     /// Prepare a DMA transfer to TX FIFO.
-    pub fn dma_push<'a, C: Channel, W: Word>(&'a mut self, ch: PeripheralRef<'a, C>, data: &'a [W]) -> Transfer<'a, C> {
+    pub fn dma_push<'a, C: Channel, W: Word>(
+        &'a mut self,
+        ch: Peri<'a, C>,
+        data: &'a [W],
+        bswap: bool,
+    ) -> Transfer<'a, C> {
         let pio_no = PIO::PIO_NO;
         let p = ch.regs();
         p.read_addr().write_value(data.as_ptr() as u32);
@@ -461,6 +471,7 @@ impl<'d, PIO: Instance, const SM: usize> StateMachineTx<'d, PIO, SM> {
             w.set_chain_to(ch.number());
             w.set_incr_read(true);
             w.set_incr_write(false);
+            w.set_bswap(bswap);
             w.set_en(true);
         });
         compiler_fence(Ordering::SeqCst);
@@ -812,7 +823,7 @@ impl<'d, PIO: Instance + 'd, const SM: usize> StateMachine<'d, PIO, SM> {
         }
 
         if let Some(origin) = config.origin {
-            unsafe { instr::exec_jmp(self, origin) }
+            unsafe { self.exec_jmp(origin) }
         }
     }
 
@@ -1136,9 +1147,7 @@ impl<'d, PIO: Instance> Common<'d, PIO> {
     /// (i.e., have their `FUNCSEL` reset to `NULL`) when the [`Common`] *and*
     /// all [`StateMachine`]s for this block have been dropped. **Other members
     /// of [`Pio`] do not keep pin registrations alive.**
-    pub fn make_pio_pin(&mut self, pin: impl Peripheral<P = impl PioPin + 'd> + 'd) -> Pin<'d, PIO> {
-        into_ref!(pin);
-
+    pub fn make_pio_pin(&mut self, pin: Peri<'d, impl PioPin + 'd>) -> Pin<'d, PIO> {
         // enable the outputs
         pin.pad_ctrl().write(|w| w.set_od(false));
         // especially important on the 235x, where IE defaults to 0
@@ -1160,7 +1169,7 @@ impl<'d, PIO: Instance> Common<'d, PIO> {
         // we can be relaxed about this because we're &mut here and nothing is cached
         PIO::state().used_pins.fetch_or(1 << pin.pin_bank(), Ordering::Relaxed);
         Pin {
-            pin: pin.into_ref().map_into(),
+            pin: pin.into(),
             pio: PhantomData::default(),
         }
     }
@@ -1293,7 +1302,7 @@ pub struct Pio<'d, PIO: Instance> {
 
 impl<'d, PIO: Instance> Pio<'d, PIO> {
     /// Create a new instance of a PIO peripheral.
-    pub fn new(_pio: impl Peripheral<P = PIO> + 'd, _irq: impl Binding<PIO::Interrupt, InterruptHandler<PIO>>) -> Self {
+    pub fn new(_pio: Peri<'d, PIO>, _irq: impl Binding<PIO::Interrupt, InterruptHandler<PIO>>) -> Self {
         PIO::state().users.store(5, Ordering::Release);
         PIO::state().used_pins.store(0, Ordering::Release);
         PIO::Interrupt::unpend();
@@ -1378,7 +1387,7 @@ trait SealedInstance {
 
 /// PIO instance.
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + Sized + Unpin {
+pub trait Instance: SealedInstance + PeripheralType + Sized + Unpin {
     /// Interrupt for this peripheral.
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }

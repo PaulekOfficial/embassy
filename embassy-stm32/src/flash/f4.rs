@@ -13,9 +13,8 @@ use crate::pac;
 mod alt_regions {
     use core::marker::PhantomData;
 
-    use embassy_hal_internal::PeripheralRef;
-
-    use crate::_generated::flash_regions::{BANK1_REGION1, BANK1_REGION2, BANK1_REGION3};
+    use crate::Peri;
+    use crate::_generated::flash_regions::{OTPRegion, BANK1_REGION1, BANK1_REGION2, BANK1_REGION3, OTP_REGION};
     use crate::_generated::FLASH_SIZE;
     use crate::flash::{asynch, Async, Bank1Region1, Bank1Region2, Blocking, Error, Flash, FlashBank, FlashRegion};
     use crate::peripherals::FLASH;
@@ -50,10 +49,10 @@ mod alt_regions {
         &ALT_BANK2_REGION3,
     ];
 
-    pub struct AltBank1Region3<'d, MODE = Async>(pub &'static FlashRegion, PeripheralRef<'d, FLASH>, PhantomData<MODE>);
-    pub struct AltBank2Region1<'d, MODE = Async>(pub &'static FlashRegion, PeripheralRef<'d, FLASH>, PhantomData<MODE>);
-    pub struct AltBank2Region2<'d, MODE = Async>(pub &'static FlashRegion, PeripheralRef<'d, FLASH>, PhantomData<MODE>);
-    pub struct AltBank2Region3<'d, MODE = Async>(pub &'static FlashRegion, PeripheralRef<'d, FLASH>, PhantomData<MODE>);
+    pub struct AltBank1Region3<'d, MODE = Async>(pub &'static FlashRegion, Peri<'d, FLASH>, PhantomData<MODE>);
+    pub struct AltBank2Region1<'d, MODE = Async>(pub &'static FlashRegion, Peri<'d, FLASH>, PhantomData<MODE>);
+    pub struct AltBank2Region2<'d, MODE = Async>(pub &'static FlashRegion, Peri<'d, FLASH>, PhantomData<MODE>);
+    pub struct AltBank2Region3<'d, MODE = Async>(pub &'static FlashRegion, Peri<'d, FLASH>, PhantomData<MODE>);
 
     pub struct AltFlashLayout<'d, MODE = Async> {
         pub bank1_region1: Bank1Region1<'d, MODE>,
@@ -62,6 +61,7 @@ mod alt_regions {
         pub bank2_region1: AltBank2Region1<'d, MODE>,
         pub bank2_region2: AltBank2Region2<'d, MODE>,
         pub bank2_region3: AltBank2Region3<'d, MODE>,
+        pub otp_region: OTPRegion<'d, MODE>,
     }
 
     impl<'d> Flash<'d> {
@@ -78,6 +78,7 @@ mod alt_regions {
                 bank2_region1: AltBank2Region1(&ALT_BANK2_REGION1, unsafe { p.clone_unchecked() }, PhantomData),
                 bank2_region2: AltBank2Region2(&ALT_BANK2_REGION2, unsafe { p.clone_unchecked() }, PhantomData),
                 bank2_region3: AltBank2Region3(&ALT_BANK2_REGION3, unsafe { p.clone_unchecked() }, PhantomData),
+                otp_region: OTPRegion(&OTP_REGION, unsafe { p.clone_unchecked() }, PhantomData),
             }
         }
 
@@ -94,6 +95,7 @@ mod alt_regions {
                 bank2_region1: AltBank2Region1(&ALT_BANK2_REGION1, unsafe { p.clone_unchecked() }, PhantomData),
                 bank2_region2: AltBank2Region2(&ALT_BANK2_REGION2, unsafe { p.clone_unchecked() }, PhantomData),
                 bank2_region3: AltBank2Region3(&ALT_BANK2_REGION3, unsafe { p.clone_unchecked() }, PhantomData),
+                otp_region: OTPRegion(&OTP_REGION, unsafe { p.clone_unchecked() }, PhantomData),
             }
         }
     }

@@ -28,8 +28,13 @@ use core::marker::PhantomData;
 use core::mem;
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicPtr, Ordering};
+#[cfg(not(feature = "arch-avr"))]
+use core::sync::atomic::AtomicPtr;
+use core::sync::atomic::Ordering;
 use core::task::{Context, Poll};
+
+#[cfg(feature = "arch-avr")]
+use portable_atomic::AtomicPtr;
 
 use self::run_queue::{RunQueue, RunQueueItem};
 use self::state::State;
@@ -138,6 +143,12 @@ impl TaskRef {
     pub(crate) fn as_ptr(self) -> *const TaskHeader {
         self.ptr.as_ptr()
     }
+
+    /// Get the ID for a task
+    #[cfg(feature = "trace")]
+    pub fn as_id(self) -> u32 {
+        self.ptr.as_ptr() as u32
+    }
 }
 
 /// Raw storage in which a task can be spawned.
@@ -213,6 +224,9 @@ impl<F: Future + 'static> TaskStorage<F> {
         let mut cx = Context::from_waker(&waker);
         match future.poll(&mut cx) {
             Poll::Ready(_) => {
+                #[cfg(feature = "trace")]
+                let exec_ptr: *const SyncExecutor = this.raw.executor.load(Ordering::Relaxed);
+
                 // As the future has finished and this function will not be called
                 // again, we can safely drop the future here.
                 this.future.drop_in_place();
@@ -224,6 +238,9 @@ impl<F: Future + 'static> TaskStorage<F> {
                 // Make sure we despawn last, so that other threads can only spawn the task
                 // after we're done with it.
                 this.raw.state.despawn();
+
+                #[cfg(feature = "trace")]
+                trace::task_end(exec_ptr, &p);
             }
             Poll::Pending => {}
         }
@@ -420,6 +437,9 @@ impl SyncExecutor {
     ///
     /// Same as [`Executor::poll`], plus you must only call this on the thread this executor was created.
     pub(crate) unsafe fn poll(&'static self) {
+        #[cfg(feature = "trace")]
+        trace::poll_start(self);
+
         self.run_queue.dequeue_all(|p| {
             let task = p.header();
 
@@ -539,6 +559,11 @@ impl Executor {
     /// `Spawner`s. You may also copy `Spawner`s.
     pub fn spawner(&'static self) -> super::Spawner {
         super::Spawner::new(self)
+    }
+
+    /// Get a unique ID for this Executor.
+    pub fn id(&'static self) -> usize {
+        &self.inner as *const SyncExecutor as usize
     }
 }
 
