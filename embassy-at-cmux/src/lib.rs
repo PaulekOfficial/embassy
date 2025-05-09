@@ -13,7 +13,7 @@ use core::pin::pin;
 use core::task::Poll;
 
 use embassy_futures::select::{select, select3, select_slice, Either, Either3};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::pipe::{Pipe, Reader, Writer};
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
@@ -28,6 +28,8 @@ use crate::frame::{Error, FrameType, NonSupportedCommandResponse};
 
 const MAX_PINGS: u8 = 3;
 
+pub type SpecialMutex = CriticalSectionRawMutex;
+
 struct Lines {
     rx: Cell<(Control, Option<Break>)>,
     tx: Cell<(Control, Option<Break>)>,
@@ -36,6 +38,9 @@ struct Lines {
     hangup_mask: Cell<Option<(u16, u16)>>,
     hangup_waker: AtomicWaker,
 }
+
+unsafe impl Sync for Lines {}
+unsafe impl Send for Lines {}
 
 impl Lines {
     const fn new() -> Self {
@@ -65,47 +70,47 @@ impl Lines {
 }
 
 pub struct Mux<const N: usize, const BUF: usize> {
-    tx: [Pipe<NoopRawMutex, BUF>; N],
-    rx: [Pipe<NoopRawMutex, BUF>; N],
+    tx: [Pipe<SpecialMutex, BUF>; N],
+    rx: [Pipe<SpecialMutex, BUF>; N],
     lines: [Lines; N],
-    line_status_updated: Signal<NoopRawMutex, ()>,
+    line_status_updated: Signal<SpecialMutex, ()>,
 }
 
 pub struct Channel<'a, const BUF: usize> {
-    rx: Reader<'a, NoopRawMutex, BUF>,
-    tx: Writer<'a, NoopRawMutex, BUF>,
+    rx: Reader<'a, SpecialMutex, BUF>,
+    tx: Writer<'a, SpecialMutex, BUF>,
     lines: &'a Lines,
-    line_status_updated: &'a Signal<NoopRawMutex, ()>,
+    line_status_updated: &'a Signal<SpecialMutex, ()>,
 }
 
 pub struct ChannelRx<'a, const BUF: usize> {
-    rx: Reader<'a, NoopRawMutex, BUF>,
+    rx: Reader<'a, SpecialMutex, BUF>,
     lines: &'a Lines,
-    line_status_updated: &'a Signal<NoopRawMutex, ()>,
+    line_status_updated: &'a Signal<SpecialMutex, ()>,
 }
 
 pub struct ChannelTx<'a, const BUF: usize> {
-    tx: Writer<'a, NoopRawMutex, BUF>,
+    tx: Writer<'a, SpecialMutex, BUF>,
     lines: &'a Lines,
-    line_status_updated: &'a Signal<NoopRawMutex, ()>,
+    line_status_updated: &'a Signal<SpecialMutex, ()>,
 }
 
 #[derive(Clone)]
 pub struct ChannelLines<'a, const BUF: usize> {
     lines: &'a Lines,
-    line_status_updated: &'a Signal<NoopRawMutex, ()>,
+    line_status_updated: &'a Signal<SpecialMutex, ()>,
 }
 
 pub struct Runner<'a, const N: usize, const BUF: usize> {
-    tx: [Reader<'a, NoopRawMutex, BUF>; N],
-    rx: [Writer<'a, NoopRawMutex, BUF>; N],
+    tx: [Reader<'a, SpecialMutex, BUF>; N],
+    rx: [Writer<'a, SpecialMutex, BUF>; N],
     control_channel_opened: bool,
     lines: &'a [Lines; N],
-    line_status_updated: &'a Signal<NoopRawMutex, ()>,
+    line_status_updated: &'a Signal<SpecialMutex, ()>,
 }
 
 impl<const N: usize, const BUF: usize> Mux<N, BUF> {
-    const ONE_PIPE: Pipe<NoopRawMutex, BUF> = Pipe::new();
+    const ONE_PIPE: Pipe<SpecialMutex, BUF> = Pipe::new();
 
     pub const fn new() -> Self {
         const LINE: Lines = Lines::new();
@@ -171,8 +176,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 frame::Sabm {
                     id: channel_id as u8 + 1,
                 }
-                .write(&mut port_w)
-                .await?;
+                    .write(&mut port_w)
+                    .await?;
             }
         }
 
@@ -193,7 +198,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 frame::RxHeader::read(&mut port_r),
                 ping_fut,
             )
-            .await
+                .await
             {
                 Either3::First((buf, i)) => {
                     // let (control, _) = self.lines[i].tx.get();
@@ -278,8 +283,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                                 },
                                             ),
                                         }
-                                        .write(&mut port_w)
-                                        .await?;
+                                            .write(&mut port_w)
+                                            .await?;
 
                                         supported = false;
                                     }
@@ -292,9 +297,9 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             } else {
                                 // received ack for a command
                                 if let Information::NonSupportedCommandResponse(NonSupportedCommandResponse {
-                                    command_type,
-                                    ..
-                                }) = info
+                                                                                    command_type,
+                                                                                    ..
+                                                                                }) = info
                                 {
                                     warn!(
                                         "The mobile station didn't support the command sent ({:?})",
@@ -427,8 +432,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 id: 0,
                 information: Information::MultiplexerCloseDown(MultiplexerCloseDown { cr: frame::CR::Command }),
             }
-            .write(&mut port_w)
-            .await?;
+                .write(&mut port_w)
+                .await?;
         }
 
         Ok(())
