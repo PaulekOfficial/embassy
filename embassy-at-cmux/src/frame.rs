@@ -705,7 +705,11 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
 
     pub(crate) async fn copy<W: embedded_io_async::Write>(&mut self, w: &mut W) -> Result<(), Error> {
         while self.len != 0 {
-            let buf = self.reader.fill_buf().await.map_err(|e| Error::Read(e.kind()))?;
+            let buf = self.reader.fill_buf().await.map_err(|e| {
+                warn!("Error reading from reader: {:?}", defmt::Debug2Format(&e));
+
+                Error::Read(e.kind())
+            })?;
             if buf.is_empty() {
                 panic!("EOF");
             }
