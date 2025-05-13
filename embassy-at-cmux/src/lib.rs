@@ -176,8 +176,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 frame::Sabm {
                     id: channel_id as u8 + 1,
                 }
-                    .write(&mut port_w)
-                    .await?;
+                .write(&mut port_w)
+                .await?;
             }
         }
 
@@ -198,7 +198,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 frame::RxHeader::read(&mut port_r),
                 ping_fut,
             )
-                .await
+            .await
             {
                 Either3::First((buf, i)) => {
                     // let (control, _) = self.lines[i].tx.get();
@@ -236,7 +236,12 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
 
                     match header.frame_type {
                         FrameType::Ui | FrameType::Uih if header.is_control() => {
-                            let info = header.read_information().await?;
+                            let info = header.read_information().await;
+                            if let Err(e) = info {
+                                error!("Error while reading information: {:?}", e);
+                                continue;
+                            }
+                            let info = info.unwrap();
 
                             if info.is_command() {
                                 let mut supported = true;
@@ -283,8 +288,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                                 },
                                             ),
                                         }
-                                            .write(&mut port_w)
-                                            .await?;
+                                        .write(&mut port_w)
+                                        .await?;
 
                                         supported = false;
                                     }
@@ -297,9 +302,9 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             } else {
                                 // received ack for a command
                                 if let Information::NonSupportedCommandResponse(NonSupportedCommandResponse {
-                                                                                    command_type,
-                                                                                    ..
-                                                                                }) = info
+                                    command_type,
+                                    ..
+                                }) = info
                                 {
                                     warn!(
                                         "The mobile station didn't support the command sent ({:?})",
@@ -319,8 +324,11 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             // let (ctrl, brk) = lines.tx.get();
                             // lines.tx.set((ctrl.with_fc(true), brk));
                             // self.line_status_updated.signal(());
-
-                            header.copy(&mut self.rx[channel_id]).await?;
+                            if let Some(rx) = self.rx.get_mut(channel_id) {
+                                header.copy(rx).await?;
+                            } else {
+                                error!("Received data for channel {} which is not opened.", channel_id);
+                            }
                         }
                         FrameType::Sabm if header.is_control() => {
                             // channel open request
@@ -401,7 +409,9 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                         }
                     }
 
-                    header.finalize().await?;
+                    if let Err(err) = header.finalize().await {
+                        error!("Error while finalizing header: {:?}", err);
+                    }
                 }
                 Either3::Third(_) if ping_number >= MAX_PINGS => {}
                 Either3::Third(_) => {
@@ -432,8 +442,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 id: 0,
                 information: Information::MultiplexerCloseDown(MultiplexerCloseDown { cr: frame::CR::Command }),
             }
-                .write(&mut port_w)
-                .await?;
+            .write(&mut port_w)
+            .await?;
         }
 
         Ok(())
