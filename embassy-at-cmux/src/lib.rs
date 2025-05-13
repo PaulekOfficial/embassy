@@ -257,13 +257,13 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                         debug!("Test command");
                                     }
                                     Information::ModemStatusCommand(msc) => {
-                                        let lines  = if let Some(lines) = self.lines.get(msc.dlci as usize - 1) {
+                                        let lines = if let Some(lines) = self.lines.get(msc.dlci as usize - 1) {
                                             lines
                                         } else {
                                             error!("Modem status command for unknown channel");
                                             continue;
                                         };
-                                        
+
                                         let new_control = msc.control.with_ea(false);
                                         let new_brk = msc.brk.map(|b| b.with_ea(false));
                                         debug!(
@@ -425,14 +425,22 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                         }
                     }
 
-                    if let Err(err) = header.finalize().await {
-                        error!("Error while finalizing header: {:?}", err);
+                    match embassy_time::with_timeout(Duration::from_millis(250), header.finalize()).await {
+                        Err(_) => {
+                            error!("Timeout while finalizing header");
+                        }
+                        Ok(Err(e)) => {
+                            error!("Error while finalizing header: {:?}", e);
+                        }
+                        Ok(Ok(_)) => {
+                            // Successfully finalized the header
+                        }
                     }
                 }
                 Either3::Third(_) if ping_number >= MAX_PINGS => {}
                 Either3::Third(_) => {
                     // Nothing has been received for a while -> test the modem
-                    debug!("Sending PING to the modem.");
+                    info!("Sending PING to the modem.");
                     // frame::Uih {
                     //     id: 0,
                     //     information: Information::Data(b"\x23\x09PING"),
