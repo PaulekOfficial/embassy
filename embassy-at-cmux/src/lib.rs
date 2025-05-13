@@ -257,7 +257,13 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                         debug!("Test command");
                                     }
                                     Information::ModemStatusCommand(msc) => {
-                                        let lines  = self.lines.get(msc.dlci as usize - 1)
+                                        let lines  = if let Some(lines) = self.lines.get(msc.dlci as usize - 1) {
+                                            lines
+                                        } else {
+                                            error!("Modem status command for unknown channel");
+                                            continue;
+                                        };
+                                        
                                         let new_control = msc.control.with_ea(false);
                                         let new_brk = msc.brk.map(|b| b.with_ea(false));
                                         debug!(
