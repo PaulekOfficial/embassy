@@ -169,7 +169,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
         }
 
         for channel_id in 0..N {
-            if !self.lines[channel_id].opened.get() {
+            if let Some(line) = self.lines.get(channel_id) {
                 debug!("Opening channel {}", channel_id);
 
                 // Send open channel request
@@ -178,6 +178,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 }
                     .write(&mut port_w)
                     .await?;
+            } else {
+                error!("Channel {} not found on Sabm packet", channel_id);
             }
         }
 
@@ -207,7 +209,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                     //     continue;
                     // }
 
-                    if !self.lines[i].opened.get() {
+                    if let None = self.lines.get(i) {
                         continue;
                     }
 
@@ -255,7 +257,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                         debug!("Test command");
                                     }
                                     Information::ModemStatusCommand(msc) => {
-                                        let lines = &self.lines[msc.dlci as usize - 1];
+                                        let lines  = self.lines.get(msc.dlci as usize - 1)
                                         let new_control = msc.control.with_ea(false);
                                         let new_brk = msc.brk.map(|b| b.with_ea(false));
                                         debug!(
@@ -373,7 +375,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                         }
                         FrameType::Ua => {
                             let channel_id = header.id() as usize - 1;
-                            if self.lines[channel_id].opened.get() {
+                            if let Some(line) = self.lines.get(channel_id) {
                                 info!("Logical channel {} closed.", channel_id);
                                 self.lines[channel_id].opened.set(false);
                             } else {
@@ -402,13 +404,17 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                         }
                         FrameType::Disc => {
                             let channel_id = header.id() as usize - 1;
-                            if self.lines[channel_id].opened.get() {
-                                self.lines[channel_id].opened.set(false);
-                                info!("Logical channel {} closed.", channel_id);
-                                frame::Ua { id: header.id() }.write(&mut port_w).await?;
+                            if let Some(line) = self.lines.get(channel_id) {
+                                if line.opened.get() {
+                                    line.opened.set(false);
+                                    info!("Logical channel {} closed.", channel_id);
+                                    frame::Ua { id: header.id() }.write(&mut port_w).await?;
+                                } else {
+                                    info!("Received DISC even though channel {} was already closed.", channel_id);
+                                    frame::Dm { id: header.id() }.write(&mut port_w).await?;
+                                }
                             } else {
-                                info!("Received DISC even though channel {} was already closed.", channel_id);
-                                frame::Dm { id: header.id() }.write(&mut port_w).await?;
+                                error!("Channel {} not found on Disc packet", channel_id);
                             }
                         }
                     }
@@ -435,8 +441,10 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
         for id in (0..N).rev() {
             let channel_id = id + 1;
             info!("Closing down the logical channel {}.", channel_id);
-            if self.lines[channel_id].opened.get() {
+            if let Some(line) = self.lines.get(channel_id) {
                 frame::Disc { id: channel_id as u8 }.write(&mut port_w).await?;
+            } else {
+                error!("Channel {} not found on Disc packet", channel_id);
             }
         }
 
