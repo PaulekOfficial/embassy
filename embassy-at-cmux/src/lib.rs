@@ -425,7 +425,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                         }
                     }
 
-                    match embassy_time::with_timeout(Duration::from_millis(250), header.finalize()).await {
+                    match embassy_time::with_timeout(Duration::from_millis(50), header.finalize()).await {
                         Err(_) => {
                             error!("Timeout while finalizing header");
                         }
