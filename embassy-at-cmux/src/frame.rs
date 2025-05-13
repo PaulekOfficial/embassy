@@ -672,7 +672,6 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     }
 
     async fn read_exact(r: &mut R, mut data: &mut [u8]) -> Result<(), Error> {
-        warn!("read_exact on: {:?}", data.len());
         let ret = Self::read_exact_inner(r, &mut data).await;
         if ret.is_err() {
             error!("read_exact error: {:?}", ret);
