@@ -333,7 +333,15 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             // lines.tx.set((ctrl.with_fc(true), brk));
                             // self.line_status_updated.signal(());
                             if let Some(rx) = self.rx.get_mut(channel_id) {
-                                header.copy(rx).await?;
+                                info!("Copy data");
+                                match embassy_time::with_timeout(Duration::from_millis(250), header.copy(rx)).await {
+                                    Err(_) => {
+                                        error!("Timeout while copying data");
+                                    }
+                                    Ok(len) => {
+                                        len?
+                                    }
+                                }
                             } else {
                                 error!("Received data for channel {} which is not opened.", channel_id);
                             }
