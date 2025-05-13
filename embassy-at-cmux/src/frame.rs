@@ -2,6 +2,7 @@
 
 use bitfield_struct::bitfield;
 use crc::CRC_8_ROHC;
+use embassy_time::Duration;
 use embedded_io_async::Error as _;
 
 const FLAG: u8 = 0xF9;
@@ -310,6 +311,7 @@ pub enum Error {
     Crc,
     MalformedFrame,
     MultiplexerCloseDown,
+    Timeout,
 }
 
 pub trait Info {
@@ -672,11 +674,11 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     }
 
     async fn read_exact(r: &mut R, mut data: &mut [u8]) -> Result<(), Error> {
-        let ret = Self::read_exact_inner(r, &mut data).await;
+        let ret = embassy_time::with_timeout(Duration::from_secs(60), Self::read_exact_inner(r, &mut data)).await;
         if ret.is_err() {
-            error!("read_exact error: {:?}", ret);
+            error!("read_exact timeout");
         }
-        ret?;
+        ret.map_err(|_| Error::Timeout)??;
         Ok(())
     }
 
