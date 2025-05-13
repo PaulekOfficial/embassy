@@ -176,8 +176,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 frame::Sabm {
                     id: channel_id as u8 + 1,
                 }
-                .write(&mut port_w)
-                .await?;
+                    .write(&mut port_w)
+                    .await?;
             }
         }
 
@@ -198,7 +198,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 frame::RxHeader::read(&mut port_r),
                 ping_fut,
             )
-            .await
+                .await
             {
                 Either3::First((buf, i)) => {
                     // let (control, _) = self.lines[i].tx.get();
@@ -288,8 +288,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                                 },
                                             ),
                                         }
-                                        .write(&mut port_w)
-                                        .await?;
+                                            .write(&mut port_w)
+                                            .await?;
 
                                         supported = false;
                                     }
@@ -302,9 +302,9 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             } else {
                                 // received ack for a command
                                 if let Information::NonSupportedCommandResponse(NonSupportedCommandResponse {
-                                    command_type,
-                                    ..
-                                }) = info
+                                                                                    command_type,
+                                                                                    ..
+                                                                                }) = info
                                 {
                                     warn!(
                                         "The mobile station didn't support the command sent ({:?})",
@@ -342,13 +342,17 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                         }
                         FrameType::Sabm => {
                             let channel_id = header.id() as usize - 1;
-                            if self.lines[channel_id].opened.get() {
-                                info!("Received SABM even though channel {} was already open.", channel_id);
+                            if let Some(line) = self.lines.get(channel_id) {
+                                if line.opened.get() {
+                                    info!("Received SABM even though channel {} was already open.", channel_id);
+                                } else {
+                                    info!("Logical channel {} opened.", channel_id);
+                                }
+                                line.opened.set(true);
+                                frame::Ua { id: header.id() }.write(&mut port_w).await?;
                             } else {
-                                info!("Logical channel {} opened.", channel_id);
+                                error!("Channel {} not found on Sabm packet", channel_id);
                             }
-                            self.lines[channel_id].opened.set(true);
-                            frame::Ua { id: header.id() }.write(&mut port_w).await?;
                         }
                         FrameType::Ua if header.is_control() => {
                             if self.control_channel_opened {
@@ -442,8 +446,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 id: 0,
                 information: Information::MultiplexerCloseDown(MultiplexerCloseDown { cr: frame::CR::Command }),
             }
-            .write(&mut port_w)
-            .await?;
+                .write(&mut port_w)
+                .await?;
         }
 
         Ok(())
