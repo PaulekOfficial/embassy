@@ -672,6 +672,16 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     }
 
     async fn read_exact(r: &mut R, mut data: &mut [u8]) -> Result<(), Error> {
+        warn!("read_exact on: {:?}", data.len());
+        let ret = Self::read_exact_inner(r, &mut data).await;
+        if ret.is_err() {
+            error!("read_exact error: {:?}", ret);
+        }
+        ret?;
+        Ok(())
+    }
+
+    async fn read_exact_inner(r: &mut R, mut data: &mut [u8]) -> Result<(), Error> {
         while !data.is_empty() {
             let buf = r.fill_buf().await.map_err(|e| Error::Read(e.kind()))?;
             if buf.is_empty() {
@@ -726,6 +736,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     }
 
     pub async fn finalize(mut self) -> Result<(), Error> {
+        let mut discarded = false;
         while self.len > 0 {
             // Discard any information here
             let buf = self.reader.fill_buf().await.map_err(|e| Error::Read(e.kind()))?;
@@ -734,12 +745,19 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
             }
             let n = buf.len().min(self.len);
             warn!("Discarding {} bytes of data in {:?}", n, self.frame_type);
+            discarded = true;
             self.reader.consume(n);
             self.len -= n;
         }
 
         let mut trailer = [0; 2];
+        if discarded {
+            info!("read exact after discarding");
+        }
         Self::read_exact(&mut self.reader, &mut trailer).await?;
+        if discarded {
+            info!("end read exact after discarding");
+        }
 
         self.fcs.update(&[trailer[0]]);
         let expected_fcs = self.fcs.finalize();
@@ -1000,9 +1018,9 @@ mod tests {
             control: Control::new(),
             brk: Some(Break::new()),
         }
-        .write(&mut w)
-        .await
-        .unwrap();
+            .write(&mut w)
+            .await
+            .unwrap();
 
         assert_eq!(&buf[..5], &[0xE3, 0x07, 2 << 2 | 0x03, 0x01, 0x01][..]);
     }
