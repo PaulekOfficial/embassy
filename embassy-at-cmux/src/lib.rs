@@ -446,7 +446,9 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                         }
                     }
                 }
-                Either3::Third(_) if ping_number >= MAX_PINGS => {}
+                Either3::Third(_) if ping_number >= MAX_PINGS => {
+                    info!("Modem probably not responding.");
+                }
                 Either3::Third(_) => {
                     // Nothing has been received for a while -> test the modem
                     info!("Sending PING to the modem.");
