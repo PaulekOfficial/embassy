@@ -337,9 +337,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                     Err(_) => {
                                         error!("Timeout while copying data");
                                     }
-                                    Ok(len) => {
-                                        len?
-                                    }
+                                    Ok(len) => len?,
                                 }
                             } else {
                                 error!("Received data for channel {} which is not opened.", channel_id);
@@ -389,12 +387,16 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                         FrameType::Ua => {
                             let channel_id = header.id() as usize - 1;
                             if let Some(line) = self.lines.get(channel_id) {
-                                info!("Logical channel {} closed.", channel_id);
-                                self.lines[channel_id].opened.set(false);
-                            } else {
-                                info!("Logical channel {} opened.", channel_id);
+                                if line.opened.get() {
+                                    info!("Logical channel {} closed.", channel_id);
+                                    line.opened.set(false);
+                                } else {
+                                    info!("Logical channel {} opened.", channel_id);
 
-                                self.lines[channel_id].opened.set(true);
+                                    line.opened.set(true);
+                                }
+                            } else {
+                                error!("Channel {} not found on Ua packet", channel_id);
                             }
                         }
                         FrameType::Dm if header.is_control() => {
