@@ -26,7 +26,7 @@ use heapless::Vec;
 
 use crate::frame::{Error, FrameType, NonSupportedCommandResponse};
 
-const MAX_PINGS: u8 = 10;
+const MAX_PINGS: u8 = 3;
 
 pub type SpecialMutex = CriticalSectionRawMutex;
 
@@ -193,7 +193,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 assert!(res.is_ok());
             }
 
-            let ping_fut = Timer::at(last_received + Duration::from_secs(20 * ping_number as u64));
+            let ping_fut = Timer::at(last_received + Duration::from_secs(5 * ping_number as u64));
 
             match select3(
                 select_slice(pin!(&mut futs)),
@@ -333,11 +333,13 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             // lines.tx.set((ctrl.with_fc(true), brk));
                             // self.line_status_updated.signal(());
                             if let Some(rx) = self.rx.get_mut(channel_id) {
-                                match embassy_time::with_timeout(Duration::from_millis(500), header.copy(rx)).await {
+                                match embassy_time::with_timeout(Duration::from_millis(250), header.copy(rx)).await {
                                     Err(_) => {
-                                        error!("Timeout while copying data, for channel {}", channel_id);
+                                        error!("Timeout while copying data");
                                     }
-                                    Ok(len) => {}
+                                    Ok(len) => {
+                                        len?
+                                    }
                                 }
                             } else {
                                 error!("Received data for channel {} which is not opened.", channel_id);
@@ -392,11 +394,10 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                     line.opened.set(false);
                                 } else {
                                     info!("Logical channel {} opened.", channel_id);
-
                                     line.opened.set(true);
                                 }
                             } else {
-                                error!("Channel {} not found on Ua packet", channel_id);
+                                warn!("Received UA for channel {} which does not exists.", channel_id);
                             }
                         }
                         FrameType::Dm if header.is_control() => {
@@ -442,14 +443,11 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             error!("Error while finalizing header: {:?}", e);
                         }
                         Ok(Ok(_)) => {
-                            trace!("Successfully finalized the header");
                             // Successfully finalized the header
                         }
                     }
                 }
-                Either3::Third(_) if ping_number >= MAX_PINGS => {
-                    info!("Modem probably not responding.");
-                }
+                Either3::Third(_) if ping_number >= MAX_PINGS => {}
                 Either3::Third(_) => {
                     // Nothing has been received for a while -> test the modem
                     info!("Sending PING to the modem.");
@@ -459,7 +457,6 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                     // }
                     // .write(&mut port_w)
                     // .await?;
-
                     ping_number += 1;
                 }
             }
