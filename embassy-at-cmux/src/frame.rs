@@ -656,6 +656,8 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
             len |= (l2[0] as usize) << 7;
         };
 
+        trace!("got frame type: {:?}, id: {}", frame_type, id);
+
         Ok(Self {
             id,
             frame_type,
@@ -674,9 +676,9 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     }
 
     async fn read_exact(r: &mut R, mut data: &mut [u8]) -> Result<(), Error> {
-        let ret = embassy_time::with_timeout(Duration::from_secs(60), Self::read_exact_inner(r, &mut data)).await;
+        let ret = embassy_time::with_timeout(Duration::from_secs(10), Self::read_exact_inner(r, &mut data)).await;
         if ret.is_err() {
-            error!("read_exact timeout");
+            warn!("read_exact timeout");
         }
         ret.map_err(|_| Error::Timeout)??;
         Ok(())
@@ -697,7 +699,9 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     }
 
     pub(crate) async fn read_information<'d>(&mut self) -> Result<Information<'d>, Error> {
-        assert!(self.len <= 24);
+        if self.len <= 24 {
+            return Err(Error::MalformedFrame);
+        }
 
         let mut buf = [0u8; 24];
         Self::read_exact(self.reader, &mut buf[..self.len]).await?;
