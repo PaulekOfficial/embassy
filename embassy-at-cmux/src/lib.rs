@@ -333,7 +333,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             // lines.tx.set((ctrl.with_fc(true), brk));
                             // self.line_status_updated.signal(());
                             if let Some(rx) = self.rx.get_mut(channel_id) {
-                                match embassy_time::with_timeout(Duration::from_millis(250), header.copy(rx)).await {
+                                match embassy_time::with_timeout(Duration::from_millis(900), header.copy(rx)).await {
                                     Err(_) => {
                                         error!("Timeout while copying data");
                                     }
@@ -435,7 +435,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                         }
                     }
 
-                    match embassy_time::with_timeout(Duration::from_millis(50), header.finalize()).await {
+                    match embassy_time::with_timeout(Duration::from_millis(900), header.finalize()).await {
                         Err(_) => {
                             error!("Timeout while finalizing header");
                         }
