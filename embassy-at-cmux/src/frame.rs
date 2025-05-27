@@ -2,7 +2,7 @@
 
 use bitfield_struct::bitfield;
 use crc::CRC_8_ROHC;
-use embassy_time::Duration;
+use embassy_time::{Delay, Duration};
 use embedded_io_async::Error as _;
 
 const FLAG: u8 = 0xF9;
@@ -604,6 +604,7 @@ pub struct RemoteLineStatus {
 pub(crate) struct RxHeader<'a, R: embedded_io_async::BufRead> {
     id: u8,
     pub frame_type: FrameType,
+    pub frame_len: usize,
     pub len: usize,
     fcs: crc::Digest<'a, u8>,
     reader: &'a mut R,
@@ -636,19 +637,33 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     pub(crate) async fn read(reader: &'a mut R) -> Result<Self, Error> {
         let mut fcs = FCS.digest();
 
-        let mut header = [FLAG; 3];
-        while header[0] == FLAG {
+        let mut header = [0xFF; 4];
+        while header[0] != FLAG {
             Self::read_exact(reader, &mut header[..1]).await?;
         }
 
-        Self::read_exact(reader, &mut header[1..]).await?;
+        //Read address byte, check if is not F9
+        Self::read_exact(reader, &mut header[1..2]).await?;
+        while header[1] == FLAG {
+            Self::read_exact(reader, &mut header[1..2]).await?;
+        }
 
-        let id = header[0] >> 2;
-        let frame_type = FrameType::try_from(header[1])?;
+        Self::read_exact(reader, &mut header[2..]).await?;
 
-        fcs.update(&header);
+        let id = header[1] >> 2;
+        let frame_type = match FrameType::try_from(header[2]) {
+            Ok(frame_type) => frame_type,
+            Err(err) => {
+                warn!("Error parsing frame type: {:?}, received octet: {:#02x}, buffer: [{:#02x} {:#02x} {:#02x} {:#02x}]", 
+                    err, header[1], header[0], header[1], header[2], header[3]);
 
-        let mut len = (header[2] >> 1) as usize;
+                return Err(Error::UnknownFrameType(header[1]))
+            },
+        };
+
+        fcs.update(&header[1..]);
+
+        let mut len = (header[3] >> 1) as usize;
         if (header[2] & EA) != EA {
             let mut l2 = [0u8; 1];
             Self::read_exact(reader, &mut l2).await?;
@@ -656,11 +671,12 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
             len |= (l2[0] as usize) << 7;
         };
 
-        trace!("got frame type: {:?}, id: {}", frame_type, id);
+        trace!("got frame type: {:?}, id: {}, len: {}", frame_type, id, len);
 
         Ok(Self {
             id,
             frame_type,
+            frame_len: len,
             len,
             reader,
             fcs,
@@ -728,13 +744,19 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
             if buf.is_empty() {
                 panic!("EOF");
             }
+            info!("Remaning bytes: {}", self.len);
             let n = buf.len().min(self.len);
+
+            info!("data: {:02x}", &buf[..]);
 
             // FIXME: This should be re-written in a way that allows us to set channel flowcontrol if `w` cannot receive more bytes
             let n = w.write(&buf[..n]).await.map_err(|e| Error::Write(e.kind()))?;
             self.reader.consume(n);
             self.len -= n;
         }
+
+        info!("Packet complete, bytes: {}", self.frame_len);
+
         w.flush().await.map_err(|e| Error::Write(e.kind()))?;
 
         Ok(())
@@ -768,7 +790,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
         let expected_fcs = self.fcs.finalize();
 
         if trailer[1] != FLAG {
-            error!("Malformed packet! Expected {:#02x} but got {:#02x}", FLAG, trailer[1]);
+            error!("Malformed packet! Expected {:#02x} but got {:#02x}, packet len: {}", FLAG, trailer[1], self.frame_len);
             return Err(Error::MalformedFrame);
         }
 
