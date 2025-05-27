@@ -744,10 +744,10 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
             if buf.is_empty() {
                 panic!("EOF");
             }
-            info!("Remaning bytes: {}", self.len);
+            trace!("Remaning bytes: {}", self.len);
             let n = buf.len().min(self.len);
 
-            info!("data: {:02x}", &buf[..]);
+            trace!("data: {:02x}", &buf[..]);
 
             // FIXME: This should be re-written in a way that allows us to set channel flowcontrol if `w` cannot receive more bytes
             let n = w.write(&buf[..n]).await.map_err(|e| Error::Write(e.kind()))?;
@@ -755,7 +755,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
             self.len -= n;
         }
 
-        info!("Packet complete, bytes: {}", self.frame_len);
+        trace!("Packet complete, bytes: {}", self.frame_len);
 
         w.flush().await.map_err(|e| Error::Write(e.kind()))?;
 
