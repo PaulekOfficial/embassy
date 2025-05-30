@@ -185,6 +185,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
 
         let mut last_received = Instant::now();
         let mut ping_number = 1u8;
+        let mut last_frame_malformed = false;
 
         loop {
             let mut futs: Vec<_, N> = Vec::new();
@@ -197,7 +198,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
 
             match select3(
                 select_slice(pin!(&mut futs)),
-                frame::RxHeader::read(&mut port_r),
+                frame::RxHeader::read(&mut port_r, last_frame_malformed),
                 ping_fut,
             )
                 .await
@@ -230,6 +231,14 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 Either3::Second(Err(e)) => {
                     match e {
                         Error::IgnoreFrame {} => {},
+                        Error::UnknownFrameType(frame_id) => {
+                            last_frame_malformed = true;
+                            error!("Unknown frame type received, ignoring it: {:?}", frame_id);
+                        }
+                        Error::MalformedFrame {} => {
+                            last_frame_malformed = true;
+                            error!("Error while reading frame RX header: {:?}", e);
+                        }
                         err => {
                             error!("Error while reading frame RX header: {:?}", err);
                         }
@@ -240,6 +249,11 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 Either3::Second(Ok(mut header)) => {
                     trace!("{:?}", header);
 
+                    if last_frame_malformed {
+                        // If we had a malformed frame before, we need to reset the state
+                        // so that we can read the next frame correctly.
+                        last_frame_malformed = false;
+                    }
                     last_received = Instant::now();
 
                     match header.frame_type {
@@ -446,7 +460,22 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             error!("Timeout while finalizing header");
                         }
                         Ok(Err(e)) => {
-                            error!("Error while finalizing header: {:?}", e);
+                            match e {
+                                Error::MalformedFrame {} => {
+                                    last_frame_malformed = true;
+                                    error!("Malformed frame received, ignoring it.");
+                                }
+                                Error::UnknownFrameType(frame_id) => {
+                                    last_frame_malformed = true;
+                                    error!("Unknown frame type received, ignoring it: {:?}", frame_id);
+                                }
+                                Error::IgnoreFrame {} => {}
+                                _ => {
+                                    error!("Error while finalizing header: {:?}", e);
+                                }
+                            }
+
+                            continue;
                         }
                         Ok(Ok(_)) => {
                             // Successfully finalized the header

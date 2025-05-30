@@ -635,19 +635,31 @@ impl<'a, R: embedded_io_async::BufRead> core::fmt::Debug for RxHeader<'a, R> {
 }
 
 impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
-    pub(crate) async fn read(reader: &'a mut R) -> Result<Self, Error> {
+    pub(crate) async fn read(reader: &'a mut R, last_frame_malformed: bool) -> Result<Self, Error> {
         let mut fcs = FCS.digest();
 
+        // Special handling if previous frame was malformed - look for two consecutive 0xF9 flags
         let mut header = [0xFF; 4];
-        while header[0] != FLAG {
-            Self::read_exact(reader, &mut header[..1]).await?;
+        if last_frame_malformed {
+            trace!("Last frame was malformed, looking for double FLAG sequence");
+            // Find two FLAGs
+            while header[0] != FLAG && header[1] != FLAG {
+                Self::read_exact(reader, &mut header[..2]).await?;
+            }
+        } else {
+            // Normal case, just look for one FLAG
+            while header[0] != FLAG {
+                Self::read_exact(reader, &mut header[..1]).await?;
+            }
         }
+
 
         //Read address byte, check if is not F9
         Self::read_exact(reader, &mut header[1..2]).await?;
         while header[1] == FLAG {
             Self::read_exact(reader, &mut header[1..2]).await?;
         }
+        let id = header[1] >> 2;
 
         Self::read_exact(reader, &mut header[2..]).await?;
 
@@ -668,7 +680,6 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
             return Err(Error::IgnoreFrame)
         }
 
-        let id = header[1] >> 2;
         let frame_type = match FrameType::try_from(header[2]) {
             Ok(frame_type) => frame_type,
             Err(err) => {
