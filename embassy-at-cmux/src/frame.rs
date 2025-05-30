@@ -307,6 +307,7 @@ pub enum Error {
     Read(embedded_io_async::ErrorKind),
     Write(embedded_io_async::ErrorKind),
     UnknownFrameType(u8),
+    IgnoreFrame,
     UnknownInformationType(u8),
     Crc,
     MalformedFrame,
@@ -649,6 +650,23 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
         }
 
         Self::read_exact(reader, &mut header[2..]).await?;
+
+        if header[2] == 0xFF {
+            // Log the malformed frame
+            warn!("Detected frame with 0xFF type, buffer: [{:#02x} {:#02x} {:#02x} {:#02x}], ignoring.", 
+            header[0], header[1], header[2], header[3]);
+
+            // Skip the rest of this frame by reading until we find the closing FLAG
+            let mut skip_buf = [0u8; 1];
+            loop {
+                Self::read_exact(reader, &mut skip_buf).await?;
+                if skip_buf[0] == FLAG {
+                    break;
+                }
+            }
+
+            return Err(Error::IgnoreFrame)
+        }
 
         let id = header[1] >> 2;
         let frame_type = match FrameType::try_from(header[2]) {

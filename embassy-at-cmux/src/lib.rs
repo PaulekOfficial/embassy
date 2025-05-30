@@ -228,7 +228,13 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 }
 
                 Either3::Second(Err(e)) => {
-                    error!("Got error while searching for RX header: {:?}", e);
+                    match e {
+                        Error::IgnoreFrame {} => {},
+                        err => {
+                            error!("Error while reading frame RX header: {:?}", err);
+                        }
+                    }
+
                     continue;
                 }
                 Either3::Second(Ok(mut header)) => {
