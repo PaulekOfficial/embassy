@@ -197,7 +197,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
             let ping_fut = Timer::at(last_received + Duration::from_secs(5 * ping_number as u64));
 
             match select3(
-                select_slice(pin!(&mut futs)),
+                select_slice(&mut pin!(&mut futs)),
                 frame::RxHeader::read(&mut port_r, last_frame_malformed),
                 ping_fut,
             )
