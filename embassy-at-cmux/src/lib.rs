@@ -176,8 +176,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 frame::Sabm {
                     id: channel_id as u8 + 1,
                 }
-                    .write(&mut port_w)
-                    .await?;
+                .write(&mut port_w)
+                .await?;
             } else {
                 error!("Channel {} not found on Sabm packet", channel_id);
             }
@@ -188,22 +188,24 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
         let mut last_frame_malformed = false;
 
         loop {
+            info!("cmux loop iteration");
             let mut futs: Vec<_, N> = Vec::new();
             for c in &mut self.tx {
                 let res = futs.push(c.fill_buf());
                 assert!(res.is_ok());
             }
 
-            let ping_fut = Timer::at(last_received + Duration::from_secs(5 * ping_number as u64));
+            //let ping_fut = Timer::at(last_received + Duration::from_secs(5 * ping_number as u64));
 
-            match select3(
+            match select(
                 select_slice(&mut pin!(&mut futs)),
                 frame::RxHeader::read(&mut port_r, last_frame_malformed),
-                ping_fut,
+                //ping_fut,
             )
-                .await
+            .await
             {
-                Either3::First((buf, i)) => {
+                Either::First((buf, i)) => {
+                    info!("Received data on channel {} lenght: {}", i, buf.len());
                     // let (control, _) = self.lines[i].tx.get();
                     // if control.fc() {
                     //     warn!("Channel {} TX flow controlled!", i + 1);
@@ -228,9 +230,10 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                     self.tx[i].consume(len);
                 }
 
-                Either3::Second(Err(e)) => {
+                Either::Second(Err(e)) => {
+                    info!("Received error while reading frame RX header: {:?}", e);
                     match e {
-                        Error::IgnoreFrame {} => {},
+                        Error::IgnoreFrame {} => {}
                         Error::UnknownFrameType(frame_id) => {
                             last_frame_malformed = true;
                             error!("Unknown frame type received, ignoring it: {:?}", frame_id);
@@ -246,8 +249,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
 
                     continue;
                 }
-                Either3::Second(Ok(mut header)) => {
-                    trace!("{:?}", header);
+                Either::Second(Ok(mut header)) => {
+                    info!("readed {:?}", header);
 
                     if last_frame_malformed {
                         // If we had a malformed frame before, we need to reset the state
@@ -316,8 +319,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                                 },
                                             ),
                                         }
-                                            .write(&mut port_w)
-                                            .await?;
+                                        .write(&mut port_w)
+                                        .await?;
 
                                         supported = false;
                                     }
@@ -330,9 +333,9 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             } else {
                                 // received ack for a command
                                 if let Information::NonSupportedCommandResponse(NonSupportedCommandResponse {
-                                                                                    command_type,
-                                                                                    ..
-                                                                                }) = info
+                                    command_type,
+                                    ..
+                                }) = info
                                 {
                                     warn!(
                                         "The mobile station didn't support the command sent ({:?})",
@@ -357,9 +360,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                     Err(_) => {
                                         error!("Timeout while copying data");
                                     }
-                                    Ok(len) => {
-                                        len?
-                                    }
+                                    Ok(len) => len?,
                                 }
                             } else {
                                 error!("Received data for channel {} which is not opened.", channel_id);
@@ -481,19 +482,20 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             // Successfully finalized the header
                         }
                     }
-                }
-                Either3::Third(_) if ping_number >= MAX_PINGS => {}
-                Either3::Third(_) => {
-                    // Nothing has been received for a while -> test the modem
-                    info!("Sending PING to the modem.");
-                    // frame::Uih {
-                    //     id: 0,
-                    //     information: Information::Data(b"\x23\x09PING"),
-                    // }
-                    // .write(&mut port_w)
-                    // .await?;
-                    ping_number += 1;
-                }
+                } /*Either3::Third(_) if ping_number >= MAX_PINGS => {
+                      error!("Max pings reached");
+                  }
+                  Either3::Third(_) => {
+                      // Nothing has been received for a while -> test the modem
+                      info!("Sending PING to the modem.");
+                      // frame::Uih {
+                      //     id: 0,
+                      //     information: Information::Data(b"\x23\x09PING"),
+                      // }
+                      // .write(&mut port_w)
+                      // .await?;
+                      ping_number += 1;
+                  }*/
             }
         }
 
@@ -513,8 +515,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 id: 0,
                 information: Information::MultiplexerCloseDown(MultiplexerCloseDown { cr: frame::CR::Command }),
             }
-                .write(&mut port_w)
-                .await?;
+            .write(&mut port_w)
+            .await?;
         }
 
         Ok(())
