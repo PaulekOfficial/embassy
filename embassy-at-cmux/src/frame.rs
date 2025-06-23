@@ -808,11 +808,11 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
 
         let mut trailer = [0; 2];
         if discarded {
-            info!("read exact after discarding");
+            debug!("read exact after discarding");
         }
         Self::read_exact(&mut self.reader, &mut trailer).await?;
         if discarded {
-            info!("end read exact after discarding");
+            debug!("end read exact after discarding");
         }
 
         self.fcs.update(&[trailer[0]]);

@@ -188,7 +188,6 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
         let mut last_frame_malformed = false;
 
         loop {
-            info!("cmux loop iteration");
             let mut futs: Vec<_, N> = Vec::new();
             for c in &mut self.tx {
                 let res = futs.push(c.fill_buf());
@@ -205,7 +204,7 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
             .await
             {
                 Either::First((buf, i)) => {
-                    info!("Received data on channel {} lenght: {}", i, buf.len());
+                    // info!("Received data on channel {} lenght: {}", i, buf.len());
                     // let (control, _) = self.lines[i].tx.get();
                     // if control.fc() {
                     //     warn!("Channel {} TX flow controlled!", i + 1);
@@ -250,8 +249,6 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                     continue;
                 }
                 Either::Second(Ok(mut header)) => {
-                    info!("readed {:?}", header);
-
                     if last_frame_malformed {
                         // If we had a malformed frame before, we need to reset the state
                         // so that we can read the next frame correctly.
