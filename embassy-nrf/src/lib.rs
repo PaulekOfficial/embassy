@@ -149,7 +149,7 @@ pub mod spim;
 #[cfg(not(feature = "_nrf51"))]
 pub mod spis;
 #[cfg(not(feature = "_nrf54l"))] // TODO
-#[cfg(not(any(feature = "_nrf5340", feature = "_nrf91")))]
+#[cfg(not(any(feature = "_nrf5340-app", feature = "_nrf91")))]
 pub mod temp;
 #[cfg(not(feature = "_nrf54l"))] // TODO
 pub mod timer;
@@ -200,9 +200,12 @@ mod chip;
 /// ```rust,ignore
 /// use embassy_nrf::{bind_interrupts, spim, peripherals};
 ///
-/// bind_interrupts!(struct Irqs {
-///     SPIM3 => spim::InterruptHandler<peripherals::SPI3>;
-/// });
+/// bind_interrupts!(
+///     /// Binds the SPIM3 interrupt.
+///     struct Irqs {
+///         SPIM3 => spim::InterruptHandler<peripherals::SPI3>;
+///     }
+/// );
 /// ```
 ///
 /// Example of how to bind multiple interrupts in a single macro invocation:
@@ -219,7 +222,7 @@ mod chip;
 // developer note: this macro can't be in `embassy-hal-internal` due to the use of `$crate`.
 #[macro_export]
 macro_rules! bind_interrupts {
-    ($vis:vis struct $name:ident {
+    ($(#[$attr:meta])* $vis:vis struct $name:ident {
         $(
             $(#[cfg($cond_irq:meta)])?
             $irq:ident => $(
@@ -229,6 +232,7 @@ macro_rules! bind_interrupts {
         )*
     }) => {
         #[derive(Copy, Clone)]
+        $(#[$attr])*
         $vis struct $name;
 
         $(
@@ -580,8 +584,12 @@ pub mod config {
 #[allow(unused)]
 mod consts {
     pub const UICR_APPROTECT: *mut u32 = 0x00FF8000 as *mut u32;
+    pub const UICR_HFXOSRC: *mut u32 = 0x00FF801C as *mut u32;
+    pub const UICR_HFXOCNT: *mut u32 = 0x00FF8020 as *mut u32;
     pub const UICR_SECUREAPPROTECT: *mut u32 = 0x00FF802C as *mut u32;
     pub const APPROTECT_ENABLED: u32 = 0x0000_0000;
+    #[cfg(feature = "_nrf9120")]
+    pub const APPROTECT_DISABLED: u32 = 0x50FA50FA;
 }
 
 #[cfg(feature = "_nrf5340-app")]
@@ -644,13 +652,18 @@ unsafe fn uicr_write_masked(address: *mut u32, value: u32, mask: u32) -> WriteRe
         return WriteResult::Failed;
     }
 
-    let nvmc = pac::NVMC;
-    nvmc.config().write(|w| w.set_wen(pac::nvmc::vals::Wen::WEN));
-    while !nvmc.ready().read().ready() {}
-    address.write_volatile(value | !mask);
-    while !nvmc.ready().read().ready() {}
-    nvmc.config().write(|_| {});
-    while !nvmc.ready().read().ready() {}
+    // Nrf9151 errata 7, need to disable interrups + use DSB https://docs.nordicsemi.com/bundle/errata_nRF9151_Rev2/page/ERR/nRF9151/Rev2/latest/anomaly_151_7.html
+    cortex_m::interrupt::free(|_cs| {
+        let nvmc = pac::NVMC;
+
+        nvmc.config().write(|w| w.set_wen(pac::nvmc::vals::Wen::WEN));
+        while !nvmc.ready().read().ready() {}
+        address.write_volatile(value | !mask);
+        cortex_m::asm::dsb();
+        while !nvmc.ready().read().ready() {}
+        nvmc.config().write(|_| {});
+        while !nvmc.ready().read().ready() {}
+    });
 
     WriteResult::Written
 }
@@ -667,6 +680,28 @@ pub fn init(config: config::Config) -> Peripherals {
 
     #[allow(unused_mut)]
     let mut needs_reset = false;
+
+    // Workaround used in the nrf mdk: file system_nrf91.c , function SystemInit(), after `#if !defined(NRF_SKIP_UICR_HFXO_WORKAROUND)`
+    #[cfg(all(feature = "_nrf91", feature = "_s"))]
+    {
+        let uicr = pac::UICR_S;
+        let hfxocnt = uicr.hfxocnt().read().hfxocnt().to_bits();
+        let hfxosrc = uicr.hfxosrc().read().hfxosrc().to_bits();
+
+        if hfxosrc == 1 {
+            unsafe {
+                let _ = uicr_write(consts::UICR_HFXOSRC, 0);
+            }
+            needs_reset = true;
+        }
+
+        if hfxocnt == 255 {
+            unsafe {
+                let _ = uicr_write(consts::UICR_HFXOCNT, 32);
+            }
+            needs_reset = true;
+        }
+    }
 
     // Setup debug protection.
     #[cfg(not(feature = "_nrf51"))]
@@ -764,6 +799,28 @@ pub fn init(config: config::Config) -> Peripherals {
             }
 
             // nothing to do on the nrf9160, debug is allowed by default.
+
+            // nrf9151, nrf9161 use the new-style approtect that requires writing a register.
+            #[cfg(feature = "nrf9120-s")]
+            unsafe {
+                let p = pac::APPROTECT_S;
+
+                let res = uicr_write(consts::UICR_APPROTECT, consts::APPROTECT_DISABLED);
+                needs_reset |= res == WriteResult::Written;
+                p.approtect()
+                    .disable()
+                    .write(|w| w.set_disable(pac::approtect::vals::ApprotectDisableDisable::SW_UNPROTECTED));
+
+                let res = uicr_write(consts::UICR_SECUREAPPROTECT, consts::APPROTECT_DISABLED);
+                needs_reset |= res == WriteResult::Written;
+                p.secureapprotect()
+                    .disable()
+                    .write(|w| w.set_disable(pac::approtect::vals::SecureapprotectDisableDisable::SW_UNPROTECTED));
+
+                // TODO: maybe add workaround for this errata
+                // It uses extra power, not sure how to let the user choose.
+                // https://docs.nordicsemi.com/bundle/errata_nRF9151_Rev1/page/ERR/nRF9151/Rev1/latest/anomaly_151_36.html#anomaly_151_36
+            }
         }
         config::Debug::Disallowed => {
             // TODO: Handle nRF54L
@@ -778,6 +835,13 @@ pub fn init(config: config::Config) -> Peripherals {
                 {
                     let res = uicr_write(consts::UICR_SECUREAPPROTECT, consts::APPROTECT_ENABLED);
                     needs_reset |= res == WriteResult::Written;
+                }
+
+                #[cfg(feature = "nrf9120-s")]
+                {
+                    let p = pac::APPROTECT_S;
+                    p.approtect().forceprotect().write(|w| w.set_forceprotect(true));
+                    p.secureapprotect().forceprotect().write(|w| w.set_forceprotect(true));
                 }
             }
         }
@@ -1034,4 +1098,28 @@ pub fn init(config: config::Config) -> Peripherals {
     }
 
     peripherals
+}
+
+/// Operating modes for peripherals.
+pub mod mode {
+    trait SealedMode {}
+
+    /// Operating mode for a peripheral.
+    #[allow(private_bounds)]
+    pub trait Mode: SealedMode {}
+
+    macro_rules! impl_mode {
+        ($name:ident) => {
+            impl SealedMode for $name {}
+            impl Mode for $name {}
+        };
+    }
+
+    /// Blocking mode.
+    pub struct Blocking;
+    /// Async mode.
+    pub struct Async;
+
+    impl_mode!(Blocking);
+    impl_mode!(Async);
 }
