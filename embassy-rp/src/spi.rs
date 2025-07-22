@@ -38,6 +38,7 @@ impl Default for Config {
             frequency: 1_000_000,
             phase: Phase::CaptureOnFirstTransition,
             polarity: Polarity::IdleLow,
+            slave_mode: false,
         }
     }
 }
