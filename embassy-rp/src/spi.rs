@@ -95,9 +95,20 @@ impl<'d, T: Instance, M: Mode> Spi<'d, T, M> {
             reg.set_txdmae(true);
         });
 
-        // finally, enable.
+
+        // Step 1: Disable SSP before changing MS bit
         p.cr1().write(|w| {
-            w.set_ms(config.slave_mode);
+            w.set_sse(false);
+        });
+
+        // Step 2: Set MS bit to configure master/slave
+        p.cr1().modify(|w| {
+            w.set_ms(config.slave_mode); // true = slave, false = master
+            // Optional: w.set_sod(true); // Set if multi-slave and you want to disable TX
+        });
+
+        // Step 3: Enable SSP
+        p.cr1().modify(|w| {
             w.set_sse(true);
         });
 
@@ -177,8 +188,20 @@ impl<'d, T: Instance, M: Mode> Spi<'d, T, M> {
             w.set_scr(postdiv);
         });
 
+
+        // Step 1: Disable SSP before changing MS bit
         p.cr1().write(|w| {
-            w.set_ms(config.slave_mode);
+            w.set_sse(false);
+        });
+
+        // Step 2: Set MS bit to configure master/slave
+        p.cr1().modify(|w| {
+            w.set_ms(config.slave_mode); // true = slave, false = master
+            // Optional: w.set_sod(true); // Set if multi-slave and you want to disable TX
+        });
+
+        // Step 3: Enable SSP
+        p.cr1().modify(|w| {
             w.set_sse(true);
         });
     }
