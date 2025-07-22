@@ -97,14 +97,14 @@ pub struct Config {
     pub mux: super::mux::ClockMux,
 }
 
-impl Default for Config {
-    fn default() -> Self {
+impl Config {
+    pub const fn new() -> Self {
         Self {
             msis: Some(Msirange::RANGE_4MHZ),
             msik: Some(Msirange::RANGE_4MHZ),
             hse: None,
             hsi: false,
-            hsi48: Some(Default::default()),
+            hsi48: Some(crate::rcc::Hsi48Config::new()),
             pll1: None,
             pll2: None,
             pll3: None,
@@ -114,9 +114,15 @@ impl Default for Config {
             apb2_pre: APBPrescaler::DIV1,
             apb3_pre: APBPrescaler::DIV1,
             voltage_range: VoltageScale::RANGE1,
-            ls: Default::default(),
-            mux: Default::default(),
+            ls: crate::rcc::LsConfig::new(),
+            mux: super::mux::ClockMux::default(),
         }
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -175,7 +181,7 @@ pub(crate) unsafe fn init(config: Config) {
             w.set_msikrange(range);
             w.set_msirgsel(Msirgsel::ICSCR1);
         });
-        RCC.cr().write(|w| {
+        RCC.cr().modify(|w| {
             w.set_msikon(true);
         });
         while !RCC.cr().read().msikrdy() {}
@@ -183,7 +189,7 @@ pub(crate) unsafe fn init(config: Config) {
     });
 
     let hsi = config.hsi.then(|| {
-        RCC.cr().write(|w| w.set_hsion(true));
+        RCC.cr().modify(|w| w.set_hsion(true));
         while !RCC.cr().read().hsirdy() {}
 
         HSI_FREQ
@@ -201,7 +207,7 @@ pub(crate) unsafe fn init(config: Config) {
         }
 
         // Enable HSE, and wait for it to stabilize
-        RCC.cr().write(|w| {
+        RCC.cr().modify(|w| {
             w.set_hseon(true);
             w.set_hsebyp(hse.mode != HseMode::Oscillator);
             w.set_hseext(match hse.mode {
