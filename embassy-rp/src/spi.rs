@@ -28,6 +28,8 @@ pub struct Config {
     pub phase: Phase,
     /// Polarity.
     pub polarity: Polarity,
+    /// Rework this
+    pub slave_mode: bool,
 }
 
 impl Default for Config {
@@ -93,7 +95,10 @@ impl<'d, T: Instance, M: Mode> Spi<'d, T, M> {
         });
 
         // finally, enable.
-        p.cr1().write(|w| w.set_sse(true));
+        p.cr1().write(|w| {
+            w.set_ms(config.slave_mode);
+            w.set_sse(true);
+        });
 
         if let Some(pin) = &clk {
             pin.gpio().ctrl().write(|w| w.set_funcsel(1));
@@ -169,6 +174,11 @@ impl<'d, T: Instance, M: Mode> Spi<'d, T, M> {
             w.set_spo(config.polarity == Polarity::IdleHigh);
             w.set_sph(config.phase == Phase::CaptureOnSecondTransition);
             w.set_scr(postdiv);
+        });
+
+        p.cr1().write(|w| {
+            w.set_ms(config.slave_mode);
+            w.set_sse(true);
         });
     }
 
