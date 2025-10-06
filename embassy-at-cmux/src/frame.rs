@@ -306,6 +306,7 @@ impl TryFrom<u8> for FrameType {
 pub enum Error {
     Read(embedded_io_async::ErrorKind),
     Write(embedded_io_async::ErrorKind),
+    UnexpectedFrameEnd,
     UnknownFrameType(u8),
     IgnoreFrame,
     UnknownInformationType(u8),
@@ -665,7 +666,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
 
         if header[2] == 0xFF {
             // Log the malformed frame
-            warn!("Detected frame with 0xFF type, buffer: [{:#02x} {:#02x} {:#02x} {:#02x}], ignoring.", 
+            // warn!("Detected frame with 0xFF type, buffer: [{:#02x} {:#02x} {:#02x} {:#02x}], ignoring.",
             header[0], header[1], header[2], header[3]);
 
             // Skip the rest of this frame by reading until we find the closing FLAG
@@ -733,7 +734,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
         while !data.is_empty() {
             let buf = r.fill_buf().await.map_err(|e| Error::Read(e.kind()))?;
             if buf.is_empty() {
-                panic!("EOF");
+                return Err(Error::UnexpectedFrameEnd);
             }
             let n = buf.len().min(data.len());
             data[..n].copy_from_slice(&buf[..n]);
@@ -771,7 +772,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
                 Error::Read(e.kind())
             })?;
             if buf.is_empty() {
-                panic!("EOF");
+                return Err(Error::UnexpectedFrameEnd);
             }
             trace!("Remaning bytes: {}", self.len);
             let n = buf.len().min(self.len);
@@ -797,7 +798,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
             // Discard any information here
             let buf = self.reader.fill_buf().await.map_err(|e| Error::Read(e.kind()))?;
             if buf.is_empty() {
-                panic!("EOF");
+                return Err(Error::UnexpectedFrameEnd);
             }
             let n = buf.len().min(self.len);
             warn!("Discarding {} bytes of data in {:?}", n, self.frame_type);
