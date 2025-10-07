@@ -667,7 +667,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
         if header[2] == 0xFF {
             // Log the malformed frame
             // warn!("Detected frame with 0xFF type, buffer: [{:#02x} {:#02x} {:#02x} {:#02x}], ignoring.",
-            header[0], header[1], header[2], header[3]);
+            // header[0], header[1], header[2], header[3]);
 
             // Skip the rest of this frame by reading until we find the closing FLAG
             let mut skip_buf = [0u8; 1];

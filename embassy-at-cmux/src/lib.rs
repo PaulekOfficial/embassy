@@ -2,6 +2,7 @@
 //! https://www.3gpp.org/ftp/tsg_t/tsg_t/tsgt_04/docs/pdfs/TP-99119.pdf
 
 #![cfg_attr(not(test), no_std)]
+#![feature(trivial_bounds)]
 
 mod fmt;
 mod frame;
@@ -176,8 +177,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 frame::Sabm {
                     id: channel_id as u8 + 1,
                 }
-                .write(&mut port_w)
-                .await?;
+                    .write(&mut port_w)
+                    .await?;
             } else {
                 error!("Channel {} not found on Sabm packet", channel_id);
             }
@@ -197,11 +198,11 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
             //let ping_fut = Timer::at(last_received + Duration::from_secs(5 * ping_number as u64));
 
             match select(
-                select_slice(&mut pin!(&mut futs)),
+                select_slice(pin!(futs.as_mut_slice())),
                 frame::RxHeader::read(&mut port_r, last_frame_malformed),
                 //ping_fut,
             )
-            .await
+                .await
             {
                 Either::First((buf, i)) => {
                     // info!("Received data on channel {} lenght: {}", i, buf.len());
@@ -316,8 +317,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                                                 },
                                             ),
                                         }
-                                        .write(&mut port_w)
-                                        .await?;
+                                            .write(&mut port_w)
+                                            .await?;
 
                                         supported = false;
                                     }
@@ -330,9 +331,9 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                             } else {
                                 // received ack for a command
                                 if let Information::NonSupportedCommandResponse(NonSupportedCommandResponse {
-                                    command_type,
-                                    ..
-                                }) = info
+                                                                                    command_type,
+                                                                                    ..
+                                                                                }) = info
                                 {
                                     warn!(
                                         "The mobile station didn't support the command sent ({:?})",
@@ -512,8 +513,8 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
                 id: 0,
                 information: Information::MultiplexerCloseDown(MultiplexerCloseDown { cr: frame::CR::Command }),
             }
-            .write(&mut port_w)
-            .await?;
+                .write(&mut port_w)
+                .await?;
         }
 
         Ok(())
