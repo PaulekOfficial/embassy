@@ -5,12 +5,12 @@ use core::future::Future;
 use core::pin::Pin as FuturePin;
 use core::task::{Context, Poll};
 
-use embassy_hal_internal::{impl_peripheral, Peri, PeripheralType};
+use embassy_hal_internal::{Peri, PeripheralType, impl_peripheral};
 use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::pac::gpio::vals::*;
 use crate::pac::gpio::{self};
-#[cfg(all(feature = "rt", any(mspm0c110x, mspm0l110x)))]
+#[cfg(all(feature = "rt", any(mspm0c110x, mspm0c1105_c1106, mspm0l110x)))]
 use crate::pac::interrupt;
 use crate::pac::{self};
 
@@ -1108,25 +1108,31 @@ fn irq_handler(gpio: gpio::Gpio, wakers: &[AtomicWaker; 32]) {
 // C110x and L110x have a dedicated interrupts just for GPIOA.
 //
 // These chips do not have a GROUP1 interrupt.
-#[cfg(all(feature = "rt", any(mspm0c110x, mspm0l110x)))]
+#[cfg(all(feature = "rt", any(mspm0c110x, mspm0c1105_c1106, mspm0l110x)))]
 #[interrupt]
 fn GPIOA() {
     irq_handler(pac::GPIOA, &PORTA_WAKERS);
+}
+
+#[cfg(all(feature = "rt", mspm0c1105_c1106))]
+#[interrupt]
+fn GPIOB() {
+    irq_handler(pac::GPIOB, &PORTB_WAKERS);
 }
 
 // These symbols are weakly defined as DefaultHandler and are called by the interrupt group implementation.
 //
 // Defining these as no_mangle is required so that the linker will pick these over the default handler.
 
-#[cfg(all(feature = "rt", not(any(mspm0c110x, mspm0l110x))))]
-#[no_mangle]
+#[cfg(all(feature = "rt", not(any(mspm0c110x, mspm0c1105_c1106, mspm0l110x))))]
+#[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 fn GPIOA() {
     irq_handler(pac::GPIOA, &PORTA_WAKERS);
 }
 
-#[cfg(all(feature = "rt", gpio_pb))]
-#[no_mangle]
+#[cfg(all(feature = "rt", gpio_pb, not(mspm0c1105_c1106)))]
+#[unsafe(no_mangle)]
 #[allow(non_snake_case)]
 fn GPIOB() {
     irq_handler(pac::GPIOB, &PORTB_WAKERS);
@@ -1134,7 +1140,7 @@ fn GPIOB() {
 
 #[cfg(all(feature = "rt", gpio_pc))]
 #[allow(non_snake_case)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn GPIOC() {
     irq_handler(pac::GPIOC, &PORTC_WAKERS);
 }
