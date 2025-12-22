@@ -14,6 +14,7 @@ use super::{AnyChannel, Channel, Dir, Request, STATE};
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac;
 use crate::pac::gpdma::vals;
+use crate::rcc::BusyPeripheral;
 
 pub mod linked_list;
 pub mod ringbuffered;
@@ -136,7 +137,6 @@ pub(crate) unsafe fn init(cs: critical_section::CriticalSection, irq_priority: c
 
 impl AnyChannel {
     /// Safety: Must be called with a matching set of parameters for a valid dma channel
-    #[cfg(not(stm32n6))]
     pub(crate) unsafe fn on_irq(&self) {
         let info = self.info();
         #[cfg(feature = "_dual-core")]
@@ -236,6 +236,11 @@ impl AnyChannel {
 
         // "Preceding reads and writes cannot be moved past subsequent writes."
         fence(Ordering::SeqCst);
+
+        if ch.cr().read().en() {
+            ch.cr().modify(|w| w.set_susp(true));
+            while !ch.sr().read().suspf() {}
+        }
 
         ch.cr().write(|w| w.set_reset(true));
         ch.fcr().write(|w| {
@@ -408,7 +413,7 @@ impl AnyChannel {
 /// Linked-list DMA transfer.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct LinkedListTransfer<'a, const ITEM_COUNT: usize> {
-    channel: Peri<'a, AnyChannel>,
+    channel: BusyPeripheral<Peri<'a, AnyChannel>>,
 }
 
 impl<'a, const ITEM_COUNT: usize> LinkedListTransfer<'a, ITEM_COUNT> {
@@ -429,7 +434,9 @@ impl<'a, const ITEM_COUNT: usize> LinkedListTransfer<'a, ITEM_COUNT> {
         channel.configure_linked_list(&table, options);
         channel.start();
 
-        Self { channel }
+        Self {
+            channel: BusyPeripheral::new(channel),
+        }
     }
 
     /// Request the transfer to pause, keeping the existing configuration for this channel.
@@ -505,7 +512,7 @@ impl<'a, const ITEM_COUNT: usize> Future for LinkedListTransfer<'a, ITEM_COUNT> 
 /// DMA transfer.
 #[must_use = "futures do nothing unless you `.await` or poll them"]
 pub struct Transfer<'a> {
-    channel: Peri<'a, AnyChannel>,
+    channel: BusyPeripheral<Peri<'a, AnyChannel>>,
 }
 
 impl<'a> Transfer<'a> {
@@ -625,7 +632,9 @@ impl<'a> Transfer<'a> {
         );
         channel.start();
 
-        Self { channel }
+        Self {
+            channel: BusyPeripheral::new(channel),
+        }
     }
 
     /// Request the transfer to pause, keeping the existing configuration for this channel.

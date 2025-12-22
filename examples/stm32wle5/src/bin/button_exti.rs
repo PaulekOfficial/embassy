@@ -5,11 +5,16 @@ use defmt::*;
 #[cfg(feature = "defmt-rtt")]
 use defmt_rtt as _;
 use embassy_executor::Spawner;
-use embassy_stm32::exti::ExtiInput;
+use embassy_stm32::exti::{self, ExtiInput};
 use embassy_stm32::gpio::Pull;
-use embassy_stm32::low_power;
+use embassy_stm32::{bind_interrupts, interrupt, low_power};
 use panic_probe as _;
 use static_cell::StaticCell;
+
+bind_interrupts!(
+    pub struct Irqs{
+        EXTI0 => exti::InterruptHandler<interrupt::typelevel::EXTI0>;
+});
 
 #[embassy_executor::main(executor = "low_power::Executor")]
 async fn async_main(_spawner: Spawner) {
@@ -34,24 +39,6 @@ async fn async_main(_spawner: Spawner) {
     // Initialize STM32WL peripherals (use default config like wio-e5-async example)
     let p = embassy_stm32::init(config);
 
-    // start with all GPIOs as analog to reduce power consumption
-    for r in [
-        embassy_stm32::pac::GPIOA,
-        embassy_stm32::pac::GPIOB,
-        embassy_stm32::pac::GPIOC,
-        embassy_stm32::pac::GPIOH,
-    ] {
-        r.moder().modify(|w| {
-            for i in 0..16 {
-                // don't reset these if probe-rs should stay connected!
-                #[cfg(feature = "defmt-rtt")]
-                if config.enable_debug_during_sleep && r == embassy_stm32::pac::GPIOA && [13, 14].contains(&i) {
-                    continue;
-                }
-                w.set_moder(i, embassy_stm32::pac::gpio::vals::Moder::ANALOG);
-            }
-        });
-    }
     #[cfg(feature = "defmt-serial")]
     {
         use embassy_stm32::mode::Blocking;
@@ -64,7 +51,7 @@ async fn async_main(_spawner: Spawner) {
 
     info!("Hello World!");
 
-    let mut button = ExtiInput::new(p.PA0, p.EXTI0, Pull::Up);
+    let mut button = ExtiInput::new(p.PA0, p.EXTI0, Pull::Up, Irqs);
 
     info!("Press the USER button...");
 

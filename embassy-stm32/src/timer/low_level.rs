@@ -13,9 +13,10 @@ use embassy_hal_internal::Peri;
 pub use stm32_metapac::timer::vals::{FilterValue, Mms as MasterMode, Sms as SlaveMode, Ts as TriggerSource};
 
 use super::*;
+use crate::dma::{self, Transfer, WritableRingBuffer};
 use crate::pac::timer::vals;
+use crate::rcc;
 use crate::time::Hertz;
-use crate::{dma, rcc};
 
 /// Input capture mode.
 #[derive(Clone, Copy)]
@@ -267,6 +268,11 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
         unsafe { crate::pac::timer::TimGp32::from_ptr(T::regs()) }
     }
 
+    #[cfg(stm32l0)]
+    fn regs_gp32_unchecked(&self) -> crate::pac::timer::TimGp16 {
+        unsafe { crate::pac::timer::TimGp16::from_ptr(T::regs()) }
+    }
+
     /// Start the timer.
     pub fn start(&self) {
         self.regs_core().cr1().modify(|r| r.set_cen(true));
@@ -295,7 +301,12 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
 
     /// get the capability of the timer
     pub fn bits(&self) -> TimerBits {
-        T::BITS
+        match T::Word::bits() {
+            16 => TimerBits::Bits16,
+            #[cfg(not(stm32l0))]
+            32 => TimerBits::Bits32,
+            _ => unreachable!(),
+        }
     }
 
     /// Set the frequency of how many times per second the timer counts up to the max value or down to 0.
@@ -305,18 +316,10 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
     /// In center-aligned mode (which not all timers support), the wrap-around frequency is effectively halved
     /// because it needs to count up and down.
     pub fn set_frequency(&self, frequency: Hertz) {
-        match T::BITS {
-            TimerBits::Bits16 => {
-                self.set_frequency_internal(frequency, 16);
-            }
-            #[cfg(not(stm32l0))]
-            TimerBits::Bits32 => {
-                self.set_frequency_internal(frequency, 32);
-            }
-        }
+        self.set_frequency_internal(frequency, T::Word::bits());
     }
 
-    pub(crate) fn set_frequency_internal(&self, frequency: Hertz, max_divide_by_bits: u8) {
+    pub(crate) fn set_frequency_internal(&self, frequency: Hertz, max_divide_by_bits: usize) {
         let f = frequency.0;
         assert!(f > 0);
         let timer_f = T::frequency().0;
@@ -325,25 +328,15 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
         let psc: u16 = unwrap!(((pclk_ticks_per_timer_period - 1) / (1 << max_divide_by_bits)).try_into());
         let divide_by = pclk_ticks_per_timer_period / (u64::from(psc) + 1);
 
-        match T::BITS {
-            TimerBits::Bits16 => {
-                // the timer counts `0..=arr`, we want it to count `0..divide_by`
-                let arr = unwrap!(u16::try_from(divide_by - 1));
+        // the timer counts `0..=arr`, we want it to count `0..divide_by`
+        let arr: T::Word = unwrap!(T::Word::try_from(divide_by - 1));
 
-                let regs = self.regs_core();
-                regs.psc().write_value(psc);
-                regs.arr().write(|r| r.set_arr(arr));
-            }
-            #[cfg(not(stm32l0))]
-            TimerBits::Bits32 => {
-                // the timer counts `0..=arr`, we want it to count `0..divide_by`
-                let arr: u32 = unwrap!(u32::try_from(divide_by - 1));
-
-                let regs = self.regs_gp32_unchecked();
-                regs.psc().write_value(psc);
-                regs.arr().write_value(arr);
-            }
-        }
+        let regs = self.regs_gp32_unchecked();
+        regs.psc().write_value(psc);
+        #[cfg(stm32l0)]
+        regs.arr().write(|r| r.set_arr(unwrap!(arr.try_into())));
+        #[cfg(not(stm32l0))]
+        regs.arr().write_value(arr.into());
     }
 
     /// Set tick frequency.
@@ -392,23 +385,14 @@ impl<'d, T: CoreInstance> Timer<'d, T> {
     pub fn get_frequency(&self) -> Hertz {
         let timer_f = T::frequency();
 
-        match T::BITS {
-            TimerBits::Bits16 => {
-                let regs = self.regs_core();
-                let arr = regs.arr().read().arr();
-                let psc = regs.psc().read();
+        let regs = self.regs_gp32_unchecked();
+        #[cfg(not(stm32l0))]
+        let arr = regs.arr().read();
+        #[cfg(stm32l0)]
+        let arr = regs.arr().read().arr();
+        let psc = regs.psc().read();
 
-                timer_f / arr / (psc + 1)
-            }
-            #[cfg(not(stm32l0))]
-            TimerBits::Bits32 => {
-                let regs = self.regs_gp32_unchecked();
-                let arr = regs.arr().read();
-                let psc = regs.psc().read();
-
-                timer_f / arr / (psc + 1)
-            }
-        }
+        timer_f / arr / (psc + 1)
     }
 
     /// Get the clock frequency of the timer (before prescaler is applied).
@@ -468,42 +452,29 @@ impl<'d, T: GeneralInstance1Channel> Timer<'d, T> {
     }
 
     /// Get max compare value. This depends on the timer frequency and the clock frequency from RCC.
-    pub fn get_max_compare_value(&self) -> u32 {
-        match T::BITS {
-            TimerBits::Bits16 => self.regs_1ch().arr().read().arr() as u32,
-            #[cfg(not(stm32l0))]
-            TimerBits::Bits32 => self.regs_gp32_unchecked().arr().read(),
-        }
+    pub fn get_max_compare_value(&self) -> T::Word {
+        #[cfg(not(stm32l0))]
+        return unwrap!(self.regs_gp32_unchecked().arr().read().try_into());
+        #[cfg(stm32l0)]
+        return unwrap!(self.regs_gp32_unchecked().arr().read().arr().try_into());
     }
 
     /// Set the max compare value.
     ///
     /// An update event is generated to load the new value. The update event is
     /// generated such that it will not cause an interrupt or DMA request.
-    pub fn set_max_compare_value(&self, ticks: u32) {
-        match T::BITS {
-            TimerBits::Bits16 => {
-                let arr = unwrap!(u16::try_from(ticks));
+    pub fn set_max_compare_value(&self, ticks: T::Word) {
+        let arr = ticks;
 
-                let regs = self.regs_1ch();
-                regs.arr().write(|r| r.set_arr(arr));
+        let regs = self.regs_gp32_unchecked();
+        #[cfg(not(stm32l0))]
+        regs.arr().write_value(arr.into());
+        #[cfg(stm32l0)]
+        regs.arr().write(|r| r.set_arr(unwrap!(arr.try_into())));
 
-                regs.cr1().modify(|r| r.set_urs(vals::Urs::COUNTER_ONLY));
-                regs.egr().write(|r| r.set_ug(true));
-                regs.cr1().modify(|r| r.set_urs(vals::Urs::ANY_EVENT));
-            }
-            #[cfg(not(stm32l0))]
-            TimerBits::Bits32 => {
-                let arr = ticks;
-
-                let regs = self.regs_gp32_unchecked();
-                regs.arr().write_value(arr);
-
-                regs.cr1().modify(|r| r.set_urs(vals::Urs::COUNTER_ONLY));
-                regs.egr().write(|r| r.set_ug(true));
-                regs.cr1().modify(|r| r.set_urs(vals::Urs::ANY_EVENT));
-            }
-        }
+        regs.cr1().modify(|r| r.set_urs(vals::Urs::COUNTER_ONLY));
+        regs.egr().write(|r| r.set_ug(true));
+        regs.cr1().modify(|r| r.set_urs(vals::Urs::ANY_EVENT));
     }
 }
 
@@ -637,25 +608,67 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
     }
 
     /// Set compare value for a channel.
-    pub fn set_compare_value(&self, channel: Channel, value: u32) {
-        match T::BITS {
-            TimerBits::Bits16 => {
-                let value = unwrap!(u16::try_from(value));
-                self.regs_gp16().ccr(channel.index()).modify(|w| w.set_ccr(value));
-            }
-            #[cfg(not(stm32l0))]
-            TimerBits::Bits32 => {
-                self.regs_gp32_unchecked().ccr(channel.index()).write_value(value);
-            }
-        }
+    pub fn set_compare_value(&self, channel: Channel, value: T::Word) {
+        #[cfg(not(stm32l0))]
+        self.regs_gp32_unchecked()
+            .ccr(channel.index())
+            .write_value(value.into());
+        #[cfg(stm32l0)]
+        self.regs_gp16()
+            .ccr(channel.index())
+            .modify(|w| w.set_ccr(unwrap!(value.try_into())));
     }
 
     /// Get compare value for a channel.
-    pub fn get_compare_value(&self, channel: Channel) -> u32 {
-        match T::BITS {
-            TimerBits::Bits16 => self.regs_gp16().ccr(channel.index()).read().ccr() as u32,
-            #[cfg(not(stm32l0))]
-            TimerBits::Bits32 => self.regs_gp32_unchecked().ccr(channel.index()).read(),
+    pub fn get_compare_value(&self, channel: Channel) -> T::Word {
+        #[cfg(not(stm32l0))]
+        return unwrap!(self.regs_gp32_unchecked().ccr(channel.index()).read().try_into());
+        #[cfg(stm32l0)]
+        return unwrap!(self.regs_gp32_unchecked().ccr(channel.index()).read().ccr().try_into());
+    }
+
+    pub(crate) fn clamp_compare_value<W: Word>(&mut self, channel: Channel) {
+        self.set_compare_value(
+            channel,
+            unwrap!(
+                self.get_compare_value(channel)
+                    .into()
+                    .clamp(0, W::max() as u32)
+                    .try_into()
+            ),
+        );
+    }
+
+    /// Setup a ring buffer for the channel
+    pub fn setup_ring_buffer<'a, W: Word + Into<T::Word>>(
+        &mut self,
+        dma: Peri<'a, impl super::UpDma<T>>,
+        channel: Channel,
+        dma_buf: &'a mut [W],
+    ) -> WritableRingBuffer<'a, W> {
+        #[allow(clippy::let_unit_value)] // eg. stm32f334
+        let req = dma.request();
+
+        unsafe {
+            use crate::dma::TransferOptions;
+            #[cfg(not(any(bdma, gpdma)))]
+            use crate::dma::{Burst, FifoThreshold};
+
+            let dma_transfer_option = TransferOptions {
+                #[cfg(not(any(bdma, gpdma)))]
+                fifo_threshold: Some(FifoThreshold::Full),
+                #[cfg(not(any(bdma, gpdma)))]
+                mburst: Burst::Incr8,
+                ..Default::default()
+            };
+
+            WritableRingBuffer::new(
+                dma,
+                req,
+                self.regs_1ch().ccr(channel.index()).as_ptr() as *mut W,
+                dma_buf,
+                dma_transfer_option,
+            )
         }
     }
 
@@ -663,25 +676,55 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
     ///
     /// Note:
     /// you will need to provide corresponding TIMx_UP DMA channel to use this method.
-    pub async fn waveform_up(&mut self, dma: Peri<'_, impl super::UpDma<T>>, channel: Channel, duty: &[u16]) {
-        #[allow(clippy::let_unit_value)] // eg. stm32f334
-        let req = dma.request();
+    pub fn setup_update_dma<'a, W: Word + Into<T::Word>>(
+        &mut self,
+        dma: Peri<'a, impl super::UpDma<T>>,
+        channel: Channel,
+        duty: &'a [W],
+    ) -> Transfer<'a> {
+        self.setup_update_dma_inner(dma.request(), dma, channel, duty)
+    }
 
-        let original_update_dma_state = self.get_update_dma_state();
+    /// Generate a sequence of PWM waveform
+    ///
+    /// Note:
+    /// The DMA channel provided does not need to correspond to the requested channel.
+    pub fn setup_channel_update_dma<'a, C: TimerChannel, W: Word + Into<T::Word>>(
+        &mut self,
+        dma: Peri<'a, impl super::Dma<T, C>>,
+        channel: Channel,
+        duty: &'a [W],
+    ) -> Transfer<'a> {
+        self.setup_update_dma_inner(dma.request(), dma, channel, duty)
+    }
 
-        if !original_update_dma_state {
-            self.enable_update_dma(true);
-        }
+    fn setup_update_dma_inner<'a, W: Word + Into<T::Word>>(
+        &mut self,
+        request: dma::Request,
+        dma: Peri<'a, impl dma::Channel>,
+        channel: Channel,
+        duty: &'a [W],
+    ) -> Transfer<'a> {
+        unsafe {
+            #[cfg(not(any(bdma, gpdma)))]
+            use crate::dma::{Burst, FifoThreshold};
+            use crate::dma::{Transfer, TransferOptions};
 
-        self.waveform_helper(dma, req, channel, duty).await;
+            let dma_transfer_option = TransferOptions {
+                #[cfg(not(any(bdma, gpdma)))]
+                fifo_threshold: Some(FifoThreshold::Full),
+                #[cfg(not(any(bdma, gpdma)))]
+                mburst: Burst::Incr8,
+                ..Default::default()
+            };
 
-        // Since DMA is closed before timer update event trigger DMA is turn off,
-        // this can almost always trigger a DMA FIFO error.
-        //
-        // optional TODO:
-        // clean FEIF after disable UDE
-        if !original_update_dma_state {
-            self.enable_update_dma(false);
+            Transfer::new_write(
+                dma,
+                request,
+                duty,
+                self.regs_gp16().ccr(channel.index()).as_ptr() as *mut W,
+                dma_transfer_option,
+            )
         }
     }
 
@@ -714,13 +757,13 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
     /// Also be aware that embassy timers use one of timers internally. It is possible to
     /// switch this timer by using `time-driver-timX` feature.
     ///
-    pub async fn waveform_up_multi_channel(
+    pub fn setup_update_dma_burst<'a, W: Word + Into<T::Word>>(
         &mut self,
-        dma: Peri<'_, impl super::UpDma<T>>,
+        dma: Peri<'a, impl super::UpDma<T>>,
         starting_channel: Channel,
         ending_channel: Channel,
-        duty: &[u16],
-    ) {
+        duty: &'a [W],
+    ) -> Transfer<'a> {
         let cr1_addr = self.regs_gp16().cr1().as_ptr() as u32;
         let start_ch_index = starting_channel.index();
         let end_ch_index = ending_channel.index();
@@ -737,11 +780,6 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
 
         #[allow(clippy::let_unit_value)] // eg. stm32f334
         let req = dma.request();
-
-        let original_update_dma_state = self.get_update_dma_state();
-        if !original_update_dma_state {
-            self.enable_update_dma(true);
-        }
 
         unsafe {
             #[cfg(not(any(bdma, gpdma)))]
@@ -760,120 +798,14 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
                 dma,
                 req,
                 duty,
-                self.regs_gp16().dmar().as_ptr() as *mut u16,
+                self.regs_gp16().dmar().as_ptr() as *mut W,
                 dma_transfer_option,
             )
-            .await
-        };
-
-        if !original_update_dma_state {
-            self.enable_update_dma(false);
         }
-    }
-
-    /// Generate a sequence of PWM waveform
-    pub async fn waveform<C: TimerChannel>(&mut self, dma: Peri<'_, impl super::Dma<T, C>>, duty: &[u16]) {
-        use crate::pac::timer::vals::Ccds;
-
-        #[allow(clippy::let_unit_value)] // eg. stm32f334
-        let req = dma.request();
-
-        let cc_channel = C::CHANNEL;
-
-        let original_cc_dma_on_update = self.get_cc_dma_selection() == Ccds::ON_UPDATE;
-        let original_cc_dma_enabled = self.get_cc_dma_enable_state(cc_channel);
-
-        // redirect CC DMA request onto Update Event
-        if !original_cc_dma_on_update {
-            self.set_cc_dma_selection(Ccds::ON_UPDATE)
-        }
-
-        if !original_cc_dma_enabled {
-            self.set_cc_dma_enable_state(cc_channel, true);
-        }
-
-        self.waveform_helper(dma, req, cc_channel, duty).await;
-
-        // Since DMA is closed before timer Capture Compare Event trigger DMA is turn off,
-        // this can almost always trigger a DMA FIFO error.
-        //
-        // optional TODO:
-        // clean FEIF after disable UDE
-        if !original_cc_dma_enabled {
-            self.set_cc_dma_enable_state(cc_channel, false);
-        }
-
-        if !original_cc_dma_on_update {
-            self.set_cc_dma_selection(Ccds::ON_COMPARE)
-        }
-    }
-
-    async fn waveform_helper(
-        &mut self,
-        dma: Peri<'_, impl dma::Channel>,
-        req: dma::Request,
-        channel: Channel,
-        duty: &[u16],
-    ) {
-        let original_duty_state = self.get_compare_value(channel);
-        let original_enable_state = self.get_channel_enable_state(channel);
-
-        if !original_enable_state {
-            self.enable_channel(channel, true);
-        }
-
-        unsafe {
-            #[cfg(not(any(bdma, gpdma)))]
-            use crate::dma::{Burst, FifoThreshold};
-            use crate::dma::{Transfer, TransferOptions};
-
-            let dma_transfer_option = TransferOptions {
-                #[cfg(not(any(bdma, gpdma)))]
-                fifo_threshold: Some(FifoThreshold::Full),
-                #[cfg(not(any(bdma, gpdma)))]
-                mburst: Burst::Incr8,
-                ..Default::default()
-            };
-
-            match self.bits() {
-                TimerBits::Bits16 => {
-                    Transfer::new_write(
-                        dma,
-                        req,
-                        duty,
-                        self.regs_1ch().ccr(channel.index()).as_ptr() as *mut u16,
-                        dma_transfer_option,
-                    )
-                    .await
-                }
-                #[cfg(not(any(stm32l0)))]
-                TimerBits::Bits32 => {
-                    #[cfg(not(any(bdma, gpdma)))]
-                    panic!("unsupported timer bits");
-
-                    #[cfg(any(bdma, gpdma))]
-                    Transfer::new_write(
-                        dma,
-                        req,
-                        duty,
-                        self.regs_1ch().ccr(channel.index()).as_ptr() as *mut u32,
-                        dma_transfer_option,
-                    )
-                    .await
-                }
-            };
-        };
-
-        // restore output compare state
-        if !original_enable_state {
-            self.enable_channel(channel, false);
-        }
-
-        self.set_compare_value(channel, original_duty_state);
     }
 
     /// Get capture value for a channel.
-    pub fn get_capture_value(&self, channel: Channel) -> u32 {
+    pub fn get_capture_value(&self, channel: Channel) -> T::Word {
         self.get_compare_value(channel)
     }
 

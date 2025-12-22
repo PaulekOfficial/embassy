@@ -9,7 +9,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 use stm32_metapac::metadata::ir::BitOffset;
 use stm32_metapac::metadata::{
-    ALL_CHIPS, ALL_PERIPHERAL_VERSIONS, METADATA, MemoryRegion, MemoryRegionKind, PeripheralRccKernelClock,
+    ALL_CHIPS, ALL_PERIPHERAL_VERSIONS, METADATA, MemoryRegion, MemoryRegionKind, Peripheral, PeripheralRccKernelClock,
     PeripheralRccRegister, PeripheralRegisters, StopMode,
 };
 
@@ -133,6 +133,9 @@ fn main() {
         cfgs.enable("backup_sram")
     }
 
+    // compile a map of peripherals
+    let peripheral_map: BTreeMap<&str, &Peripheral> = METADATA.peripherals.iter().map(|p| (p.name, p)).collect();
+
     // generate one singleton per peripheral (with many exceptions...)
     for p in METADATA.peripherals {
         if let Some(r) = &p.registers {
@@ -169,6 +172,11 @@ fn main() {
                         }
                     }
                     singletons.push(p.name.to_string());
+                }
+
+                "eth" => {
+                    singletons.push(p.name.to_string());
+                    singletons.push("ETH_SMA".to_string());
                 }
                 //"dbgmcu" => {}
                 //"syscfg" => {}
@@ -314,9 +322,33 @@ fn main() {
         _ => panic!("unknown time_driver {:?}", time_driver),
     };
 
-    if !time_driver_singleton.is_empty() {
+    let time_driver_irq_decl = if !time_driver_singleton.is_empty() {
         cfgs.enable(format!("time_driver_{}", time_driver_singleton.to_lowercase()));
-    }
+
+        let p = peripheral_map.get(time_driver_singleton).unwrap();
+        let irqs: BTreeSet<_> = p
+            .interrupts
+            .iter()
+            .filter(|i| i.signal == "CC" || i.signal == "UP")
+            .map(|i| i.interrupt.to_ascii_uppercase())
+            .collect();
+
+        irqs.iter()
+            .map(|i| {
+                let irq = format_ident!("{}", i);
+                quote! {
+                    #[cfg(feature = "rt")]
+                    #[interrupt]
+                    fn #irq() {
+                        crate::time_driver::get_driver().on_interrupt();
+                    }
+                }
+            })
+            .collect()
+    } else {
+        TokenStream::new()
+    };
+
     for tim in [
         "tim1", "tim2", "tim3", "tim4", "tim5", "tim8", "tim9", "tim12", "tim15", "tim20", "tim21", "tim22", "tim23",
         "tim24",
@@ -348,8 +380,13 @@ fn main() {
     // ========
     // Generate interrupt declarations
 
+    let mut exti2_tsc_shared_int_present: Option<stm32_metapac::metadata::Interrupt> = None;
     let mut irqs = Vec::new();
     for irq in METADATA.interrupts {
+        // The PAC doesn't ensure this is listed as the IRQ of EXTI2, so we must do so
+        if irq.name == "EXTI2_TSC" {
+            exti2_tsc_shared_int_present = Some(irq.clone())
+        }
         irqs.push(format_ident!("{}", irq.name));
     }
 
@@ -360,6 +397,8 @@ fn main() {
             )*
         );
     });
+
+    g.extend(time_driver_irq_decl);
 
     // ========
     // Generate FLASH regions
@@ -911,6 +950,60 @@ fn main() {
             }
         }
 
+        if kind == "gpio" {
+            for p in METADATA.peripherals {
+                // set all GPIOs to analog mode except for PA13 and PA14 which are SWDIO and SWDCLK
+                if p.registers.is_some()
+                    && p.registers.as_ref().unwrap().kind == "gpio"
+                    && p.registers.as_ref().unwrap().version != "v1"
+                {
+                    let port = format_ident!("{}", p.name);
+                    if p.name == "GPIOA" {
+                        gg.extend(quote! {
+                            // leave PA13 and PA14 as unchanged
+                            crate::pac::#port.moder().modify(|w| {
+                                w.set_moder(0, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(1, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(2, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(3, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(4, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(5, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(6, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(7, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(8, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(9, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(10, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(11, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(12, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(15, crate::pac::gpio::vals::Moder::ANALOG);
+                            });
+                        });
+                    } else {
+                        gg.extend(quote! {
+                            crate::pac::#port.moder().modify(|w| {
+                                w.set_moder(0, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(1, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(2, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(3, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(4, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(5, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(6, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(7, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(8, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(9, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(10, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(11, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(12, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(13, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(14, crate::pac::gpio::vals::Moder::ANALOG);
+                                w.set_moder(15, crate::pac::gpio::vals::Moder::ANALOG);
+                            });
+                        });
+                    }
+                }
+            }
+        }
+
         let fname = format_ident!("init_{}", kind);
         g.extend(quote! {
             pub unsafe fn #fname(){
@@ -1347,6 +1440,9 @@ fn main() {
         (("tsc", "G8_IO2"), quote!(crate::tsc::G8IO2Pin)),
         (("tsc", "G8_IO3"), quote!(crate::tsc::G8IO3Pin)),
         (("tsc", "G8_IO4"), quote!(crate::tsc::G8IO4Pin)),
+        (("lcd", "SEG"), quote!(crate::lcd::SegPin)),
+        (("lcd", "COM"), quote!(crate::lcd::ComPin)),
+        (("lcd", "VLCD"), quote!(crate::lcd::VlcdPin)),
         (("dac", "OUT1"), quote!(crate::dac::DacPin<Ch1>)),
         (("dac", "OUT2"), quote!(crate::dac::DacPin<Ch2>)),
     ].into();
@@ -1354,9 +1450,22 @@ fn main() {
     for p in METADATA.peripherals {
         if let Some(regs) = &p.registers {
             let mut adc_pairs: BTreeMap<u8, (Option<Ident>, Option<Ident>)> = BTreeMap::new();
+            let mut seen_lcd_seg_pins = HashSet::new();
 
             for pin in p.pins {
-                let key = (regs.kind, pin.signal);
+                let mut key = (regs.kind, pin.signal);
+
+                // LCD is special. There are so many pins!
+                if regs.kind == "lcd" {
+                    key.1 = pin.signal.trim_end_matches(char::is_numeric);
+
+                    if key.1 == "SEG" && !seen_lcd_seg_pins.insert(pin.pin) {
+                        // LCD has SEG pins multiplexed in the peripheral
+                        // This means we can see them twice. We need to skip those so we're not impl'ing the trait twice
+                        continue;
+                    }
+                }
+
                 if let Some(tr) = signals.get(&key) {
                     let mut peri = format_ident!("{}", p.name);
 
@@ -1397,6 +1506,11 @@ fn main() {
                         } else {
                             panic! {"malformed XSPIM pin: {:?}", pin}
                         }
+                    }
+
+                    // MDIO and MDC are special
+                    if pin.signal == "MDIO" || pin.signal == "MDC" {
+                        peri = format_ident!("{}", "ETH_SMA");
                     }
 
                     // XSPI NCS pin to CSSEL mapping
@@ -1786,7 +1900,19 @@ fn main() {
     for p in METADATA.peripherals {
         let mut pt = TokenStream::new();
 
+        let mut exti2_tsc_injected = false;
+        if let Some(ref irq) = exti2_tsc_shared_int_present
+            && p.name == "EXTI"
+        {
+            exti2_tsc_injected = true;
+            let iname = format_ident!("{}", irq.name);
+            let sname = format_ident!("{}", "EXTI2");
+            pt.extend(quote!(pub type #sname = crate::interrupt::typelevel::#iname;));
+        }
         for irq in p.interrupts {
+            if exti2_tsc_injected && irq.signal == "EXTI2" {
+                continue;
+            }
             let iname = format_ident!("{}", irq.interrupt);
             let sname = format_ident!("{}", irq.signal);
             pt.extend(quote!(pub type #sname = crate::interrupt::typelevel::#iname;));
@@ -1819,7 +1945,7 @@ fn main() {
         flash_regions_table.push(row);
     }
 
-    let gpio_base = METADATA.peripherals.iter().find(|p| p.name == "GPIOA").unwrap().address as u32;
+    let gpio_base = peripheral_map.get("GPIOA").unwrap().address as u32;
     let gpio_stride = 0x400;
 
     for pin in METADATA.pins {
@@ -1937,6 +2063,19 @@ fn main() {
             continue;
         }
 
+        let dma_peri = peripheral_map.get(ch.dma).unwrap();
+        let stop_mode = dma_peri
+            .rcc
+            .as_ref()
+            .map(|rcc| rcc.stop_mode.clone())
+            .unwrap_or_default();
+
+        let stop_mode = match stop_mode {
+            StopMode::Standby => quote! { Standby },
+            StopMode::Stop2 => quote! { Stop2 },
+            StopMode::Stop1 => quote! { Stop1 },
+        };
+
         let name = format_ident!("{}", ch.name);
         let idx = ch_idx as u8;
         #[cfg(feature = "_dual-core")]
@@ -1949,12 +2088,10 @@ fn main() {
             quote!(crate::pac::Interrupt::#irq_name)
         };
 
-        g.extend(quote!(dma_channel_impl!(#name, #idx);));
+        g.extend(quote!(dma_channel_impl!(#name, #idx, #stop_mode);));
 
         let dma = format_ident!("{}", ch.dma);
         let ch_num = ch.channel as usize;
-
-        let dma_peri = METADATA.peripherals.iter().find(|p| p.name == ch.dma).unwrap();
         let bi = dma_peri.registers.as_ref().unwrap();
 
         let dma_info = match bi.kind {

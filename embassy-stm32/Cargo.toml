@@ -184,8 +184,8 @@ vcell = "0.1.3"
 nb = "1.0.0"
 stm32-fmc = "0.4.0"
 cfg-if = "1.0.0"
-embedded-io = { version = "0.6.0" }
-embedded-io-async = { version = "0.6.1" }
+embedded-io = { version = "0.7.1" }
+embedded-io-async = { version = "0.7.0" }
 chrono = { version = "^0.4", default-features = false, optional = true }
 bit_field = "0.10.2"
 trait-set = "0.3.0"
@@ -193,18 +193,20 @@ document-features = "0.2.7"
 
 static_assertions = { version = "1.1" }
 volatile-register = { version = "0.2.1" }
-bitflags = "2.4.2"
+bitflags = "2.10.0"
 
 block-device-driver = { version = "0.2" }
-aligned = "0.4.1"
+aligned = "0.4.3"
 heapless = "0.9.1"
 
 #stm32-metapac = { version = "18" }
-stm32-metapac = { git = "https://github.com/embassy-rs/stm32-data-generated", tag = "stm32-data-b77c8d968f53b18d6bdcd052e354b5070ec2bbc2" }
+stm32-metapac = { git = "https://github.com/embassy-rs/stm32-data-generated", tag = "stm32-data-c0123f4251e21282c3f26114d2f6f9360c1191f1" }
+#stm32-metapac = { path = "../../stm32-data/build/stm32-metapac" }
 
 [build-dependencies]
 #stm32-metapac = { version = "18", default-features = false, features = ["metadata"]}
-stm32-metapac = { git = "https://github.com/embassy-rs/stm32-data-generated", tag = "stm32-data-b77c8d968f53b18d6bdcd052e354b5070ec2bbc2", default-features = false, features = ["metadata"] }
+stm32-metapac = { git = "https://github.com/embassy-rs/stm32-data-generated", tag = "stm32-data-c0123f4251e21282c3f26114d2f6f9360c1191f1", default-features = false, features = ["metadata"] }
+#stm32-metapac = { path = "../../stm32-data/build/stm32-metapac", default-features = false, features = ["metadata"] }
 
 proc-macro2 = "1.0.36"
 quote = "1.0.15"
@@ -228,7 +230,7 @@ defmt = [
     "embassy-sync/defmt",
     "embassy-embedded-hal/defmt",
     "embassy-hal-internal/defmt",
-    "embedded-io-async/defmt-03",
+    "embedded-io-async/defmt",
     "embassy-usb-driver/defmt",
     "embassy-net-driver/defmt",
     "embassy-time?/defmt",
@@ -241,8 +243,9 @@ log = ["dep:log"]
 chrono = ["dep:chrono"]
 
 exti = []
-low-power = [ "dep:embassy-executor", "embassy-executor?/arch-cortex-m", "time" ]
-low-power-debug-with-sleep = []
+low-power = [ "dep:embassy-executor", "time", "chrono" ]
+low-power-pender = [ "low-power" ]
+low-power-debug-with-sleep = [ "low-power" ]
 
 ## Automatically generate `memory.x` file based on the memory map from [`stm32-metapac`](https://docs.rs/stm32-metapac/)
 memory-x = []

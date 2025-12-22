@@ -6,7 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased - ReleaseDate
+- Add `receive_waveform` method in `InputCapture`, allowing asynchronous input capture with DMA.
 
+- fix: stm32: GPDMA driver reset ignored during channel configuration
+- fix: stm32: SPI driver SSOE and SSM manegment, add `nss_output_disable` to SPI Config
+- change: stm32: use typelevel timer type to allow dma for 32 bit timers
+- fix: fix incorrect handling of split interrupts in timer driver
+- feat: allow granular stop for regular usart
+- feat: Add continuous waveform method to SimplePWM
+- change: remove waveform timer method
+- change: low power: store stop mode for dma channels
+- fix: Fixed ADC4 enable() for WBA
+- feat: allow use of anyadcchannel for adc4
+- fix: fix incorrect logic for buffered usart transmission complete.
+- feat: add poll_for methods to exti
+- feat: implement stop for stm32wb.
+- change: rework hsem and add HIL test for some chips.
+- change: stm32/eth: ethernet no longer has a hard dependency on station management, and station management can be used independently ([#4871](https://github.com/embassy-rs/embassy/pull/4871))
 - feat: allow embassy_executor::main for low power
 - feat: Add waveform methods to ComplementaryPwm
 - fix: Avoid generating timer update events when updating the frequency ([#4890](https://github.com/embassy-rs/embassy/pull/4890))
@@ -32,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - feat: Configurable gpio speed for QSPI
 - feat: derive Clone, Copy and defmt::Format for all *SPI-related configs
 - fix: handle address and data-length errors in OSPI
-- feat: Allow OSPI DMA writes larger than 64kB using chunking
+- feat: Allow OSPI/HSPI/XSPI DMA writes larger than 64kB using chunking
 - feat: More ADC enums for g0 PAC, API change for oversampling, allow separate sample times
 - feat: Add USB CRS sync support for STM32C071
 - fix: RTC register definition for STM32L4P5 and L4Q5 as they use v3 register map.
@@ -43,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - feat: stm32/usart: add `eager_reads` option to control if buffered readers return as soon as possible or after more data is available ([#4668](https://github.com/embassy-rs/embassy/pull/4668))
 - feat: stm32/usart: add `de_assertion_time` and `de_deassertion_time` config options
 - change: stm32/uart: BufferedUartRx now returns all available bytes from the internal buffer
+- fix: Properly set the transfer size for OSPI/HSPI/XSPI transfers with word sizes other than 8 bits.
 - fix: stm32/adc: Calculate the ADC prescaler in a way that it allows for the max frequency to be reached
 - fix: Prevent a HardFault crash on STM32H5 devices by changing `uid()` to return `[u8; 12]` by value instead of a reference. (Fixes #2696)
 - change: timer: added output compare values
@@ -56,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - low-power: update rtc api to allow reconfig
 - adc: consolidate ringbuffer
 - feat: Added RTC low-power support for STM32WLEx ([#4716](https://github.com/embassy-rs/embassy/pull/4716))
+- feat: Added low-power support for STM32WL5x ([#5108](https://github.com/embassy-rs/embassy/pull/5108))
 - fix: Correct STM32WBA VREFBUFTRIM values
 - low_power: remove stop_with rtc and initialize in init if low-power feature enabled.
 - feat: stm32/dsi support zero parameter commands in `write_cmd` ([#4847](https://github.com/embassy-rs/embassy/pull/4847))
@@ -66,6 +84,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - feat: add flash support for c0 family ([#4874](https://github.com/embassy-rs/embassy/pull/4874))
 - fix: fixing channel numbers on vbat and vddcore for adc on adc
 - adc: adding disable to vbat
+- feat: stm32/flash: add async support for h7 family
+- feat: exti brought in line with other drivers' interrupt rebinding system ([#4922](https://github.com/embassy-rs/embassy/pull/4922))
+- removal: ExtiInput no longer accepts AnyPin/AnyChannel; AnyChannel removed entirely
+- fix: build script ensures EXTI2_TSC is listed as the IRQ of EXTI2 even if the PAC doesn't
+- feat: stm32/lcd: added implementation
+- change: add error messages to can timing calculations ([#4961](https://github.com/embassy-rs/embassy/pull/4961))
+- feat: stm32/spi bidirectional mode 
+- fix: stm32/i2c v2: add stop flag on stop received
+- stm32: Add blocking_listen for blocking I2C driver
+- fix: stm32l47*/stm32l48* adc analog pin setup
+- fix: keep stm32/sai: make NODIV independent of MCKDIV
+- fix: Source system clock from MSIS before (de)configuring PLLs on STM32U5
+- feat: adc: allow DMA reads to loop through enabled channels
 
 ## 0.4.0 - 2025-08-26
 

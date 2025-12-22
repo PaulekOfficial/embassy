@@ -3,6 +3,7 @@
 
 #[cfg(any(bdma, dma))]
 mod dma_bdma;
+
 #[cfg(any(bdma, dma))]
 pub use dma_bdma::*;
 
@@ -27,6 +28,7 @@ pub mod word;
 use embassy_hal_internal::{PeripheralType, impl_peripheral};
 
 use crate::interrupt;
+use crate::rcc::StoppablePeripheral;
 
 /// The direction of a DMA transfer.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -45,12 +47,10 @@ pub type Request = u8;
 #[cfg(not(any(dma_v2, bdma_v2, gpdma, dmamux)))]
 pub type Request = ();
 
-pub(crate) trait SealedChannel {
-    #[cfg(not(stm32n6))]
+pub(crate) trait SealedChannel: StoppablePeripheral {
     fn id(&self) -> u8;
 }
 
-#[cfg(not(stm32n6))]
 pub(crate) trait ChannelInterrupt {
     #[cfg_attr(not(feature = "rt"), allow(unused))]
     unsafe fn on_irq();
@@ -60,17 +60,29 @@ pub(crate) trait ChannelInterrupt {
 #[allow(private_bounds)]
 pub trait Channel: SealedChannel + PeripheralType + Into<AnyChannel> + 'static {}
 
-#[cfg(not(stm32n6))]
 macro_rules! dma_channel_impl {
-    ($channel_peri:ident, $index:expr) => {
+    ($channel_peri:ident, $index:expr, $stop_mode:ident) => {
+        impl crate::rcc::StoppablePeripheral for crate::peripherals::$channel_peri {
+            #[cfg(feature = "low-power")]
+            fn stop_mode(&self) -> crate::rcc::StopMode {
+                crate::rcc::StopMode::$stop_mode
+            }
+        }
+
         impl crate::dma::SealedChannel for crate::peripherals::$channel_peri {
             fn id(&self) -> u8 {
                 $index
             }
         }
+
         impl crate::dma::ChannelInterrupt for crate::peripherals::$channel_peri {
             unsafe fn on_irq() {
-                crate::dma::AnyChannel { id: $index }.on_irq();
+                crate::dma::AnyChannel {
+                    id: $index,
+                    #[cfg(feature = "low-power")]
+                    stop_mode: crate::rcc::StopMode::$stop_mode,
+                }
+                .on_irq();
             }
         }
 
@@ -80,6 +92,8 @@ macro_rules! dma_channel_impl {
             fn from(val: crate::peripherals::$channel_peri) -> Self {
                 Self {
                     id: crate::dma::SealedChannel::id(&val),
+                    #[cfg(feature = "low-power")]
+                    stop_mode: crate::rcc::StoppablePeripheral::stop_mode(&val),
                 }
             }
         }
@@ -89,6 +103,8 @@ macro_rules! dma_channel_impl {
 /// Type-erased DMA channel.
 pub struct AnyChannel {
     pub(crate) id: u8,
+    #[cfg(feature = "low-power")]
+    pub(crate) stop_mode: crate::rcc::StopMode,
 }
 impl_peripheral!(AnyChannel);
 
@@ -98,8 +114,14 @@ impl AnyChannel {
     }
 }
 
+impl StoppablePeripheral for AnyChannel {
+    #[cfg(feature = "low-power")]
+    fn stop_mode(&self) -> crate::rcc::StopMode {
+        self.stop_mode
+    }
+}
+
 impl SealedChannel for AnyChannel {
-    #[cfg(not(stm32n6))]
     fn id(&self) -> u8 {
         self.id
     }

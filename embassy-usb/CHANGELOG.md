@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased - ReleaseDate
 
 - Add support for USB HID Boot Protocol Mode 
+- Bump usbd-hid from 0.8.1 to 0.9.0
+- Fix a bug where CDC ACM BufferedReceiver repeats data when its future is dropped
+- Expose `dtr()` and `rts()` on `cdc_acm::ControlChanged`
 
 ## 0.5.1 - 2025-08-26
 
