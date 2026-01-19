@@ -767,6 +767,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     pub(crate) async fn copy<W: embedded_io_async::Write>(&mut self, w: &mut W) -> Result<(), Error> {
         while self.len != 0 {
             let buf = self.reader.fill_buf().await.map_err(|e| {
+                #[cfg(feature = "defmt")]
                 warn!("Error reading from reader: {:?}", defmt::Debug2Format(&e));
 
                 Error::Read(e.kind())
@@ -1047,7 +1048,7 @@ mod tests {
         let mut channel_buf = [0u8; 256];
         let mut writer = &mut channel_buf[..];
 
-        let mut header = RxHeader::read(&mut reader).await.unwrap();
+        let mut header = RxHeader::read(&mut reader, false).await.unwrap();
 
         let len = header.len;
         header.copy(&mut writer).await.unwrap();

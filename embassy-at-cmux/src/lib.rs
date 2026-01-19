@@ -621,15 +621,15 @@ pub enum ChannelError {
     Hangup,
 }
 
-impl fmt::Display for ChannelError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl core::fmt::Display for ChannelError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             ChannelError::Hangup => write!(f, "channel hangup detected"),
         }
     }
 }
 
-impl core::error::Error for ChannelError {};
+impl core::error::Error for ChannelError {}
 
 impl embedded_io_async::Error for ChannelError {
     fn kind(&self) -> embedded_io_async::ErrorKind {
