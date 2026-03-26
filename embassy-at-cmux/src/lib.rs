@@ -18,7 +18,7 @@ use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex};
 use embassy_sync::pipe::{Pipe, Reader, Writer};
 use embassy_sync::signal::Signal;
 use embassy_sync::waitqueue::AtomicWaker;
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Instant};
 use embedded_io_async::{BufRead, ErrorType, Read, Write};
 pub use frame::{Break, Control};
 use frame::{Frame, Information, MultiplexerCloseDown};
@@ -664,7 +664,7 @@ impl<'a, const BUF: usize> Write for Channel<'a, BUF> {
         check_hangup(self.tx.write(buf), self.lines).await
     }
 
-    async fn flush(&mut self) -> Result<(), <Self as ErrorType>::Error> {
+    async fn flush(&mut self) -> Result<(), Self::Error> {
         Ok(())
     }
 }
@@ -723,3 +723,4 @@ where
         Either::Second(()) => Err(ChannelError::Hangup),
     })
 }
+
