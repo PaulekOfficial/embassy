@@ -3,12 +3,16 @@
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_stm32::Config;
 use embassy_stm32::adc::{Adc, AdcChannel as _, SampleTime};
+use embassy_stm32::{Config, bind_interrupts, dma, peripherals};
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 
 static mut DMA_BUF: [u16; 2] = [0; 2];
+
+bind_interrupts!(struct Irqs {
+    DMA1_CHANNEL1 => dma::InterruptHandler<peripherals::DMA1_CH1>;
+});
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -29,19 +33,21 @@ async fn main(_spawner: Spawner) {
         config.rcc.mux.adc12sel = mux::Adcsel::SYS;
         config.rcc.sys = Sysclk::PLL1_R;
     }
-    let p = embassy_stm32::init(config);
+    let mut p = embassy_stm32::init(config);
 
     info!("Hello World!");
 
     let mut adc = Adc::new(p.ADC1, Default::default());
 
     let mut dma = p.DMA1_CH1;
-    let mut vrefint_channel = adc.enable_vrefint().degrade_adc();
+    let mut vrefint = adc.enable_vrefint();
+    let mut vrefint_channel = vrefint.degrade_adc();
     let mut pa0 = p.PA0.degrade_adc();
 
     loop {
         adc.read(
             dma.reborrow(),
+            Irqs,
             [
                 (&mut vrefint_channel, SampleTime::CYCLES247_5),
                 (&mut pa0, SampleTime::CYCLES247_5),

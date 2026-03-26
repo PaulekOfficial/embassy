@@ -7,57 +7,81 @@
 //! # Architecture
 //!
 //! ```text
-//! ┌─────────────────────────────────────────────────────────┐
-//! │                    Embassy Executor                      │
-//! │  ┌─────────────────────────────────────────────────┐    │
-//! │  │ Runner Task (uses executor's stack)              │    │
-//! │  │                                                   │    │
-//! │  │  loop {                                          │    │
-//! │  │    sequencer_resume();  // switch to sequencer   │    │
-//! │  │    // returns when sequencer yields              │    │
-//! │  │    yield_now().await;   // let other tasks run   │    │
-//! │  │  }                                               │    │
-//! │  └─────────────────────────────────────────────────┘    │
-//! └─────────────────────────────────────────────────────────┘
+//! ┌────────────────────────────────────────────────────────────┐
+//! │                    Embassy Executor                        │
+//! │  ┌────────────────────────────────────────────────────┐    │
+//! │  │ Runner Task (uses executor's stack)                │    │
+//! │  │                                                    │    │
+//! │  │  loop {                                            │    │
+//! │  │    util_seq::seq_resume();  // switch to sequencer │    │
+//! │  │    // returns when sequencer yields                │    │
+//! │  │    yield_now().await;   // let other tasks run     │    │
+//! │  │  }                                                 │    │
+//! │  └────────────────────────────────────────────────────┘    │
+//! └────────────────────────────────────────────────────────────┘
 //!
-//! ┌─────────────────────────────────────────────────────────┐
-//! │  Sequencer Context (separate stack)                      │
-//! │                                                          │
-//! │  - Runs BLE stack C code via poll_pending_tasks()       │
-//! │  - When idle, calls sequencer_yield() to return         │
-//! └─────────────────────────────────────────────────────────┘
+//! ┌────────────────────────────────────────────────────────────┐
+//! │  Sequencer Context (separate stack)                        │
+//! │                                                            │
+//! │  - Runs BLE stack C code via poll_pending_tasks()          │
+//! │  - When idle, calls sequencer_yield() to return            │
+//! └────────────────────────────────────────────────────────────┘
 //! ```
 
-use core::arch::asm;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
-/// Size of the sequencer stack in bytes (8KB)
-/// This needs to be large enough for the C BLE stack's call depth
-const SEQUENCER_STACK_SIZE: usize = 8 * 1024;
+use aligned::{A8, Aligned};
 
-/// Saved CPU context for context switching
-#[repr(C)]
-struct SavedContext {
-    /// Saved stack pointer
-    sp: u32,
-    /// Context has been initialized
-    initialized: bool,
+// Pure assembly context switch: saves R4-R11+LR, swaps SP, restores R4-R11+LR, returns.
+// Defined via global_asm! so the compiler generates NO prologue/epilogue — the caller
+// sees a normal C function call, which is exactly what this is (just on a different stack).
+#[cfg(target_arch = "arm")]
+core::arch::global_asm!(
+    ".thumb_func",
+    ".global context_switch_asm",
+    ".type context_switch_asm, %function",
+    "context_switch_asm:",
+    "push {{r4-r11, lr}}",
+    "str sp, [r0]",
+    "ldr sp, [r1]",
+    "pop {{r4-r11, lr}}",
+    "bx lr",
+    ".size context_switch_asm, . - context_switch_asm",
+);
+
+#[cfg(target_arch = "arm")]
+unsafe extern "C" {
+    /// Raw context switch. Arguments:
+    /// - r0: pointer to u32 where current SP will be saved
+    /// - r1: pointer to u32 from which new SP will be loaded
+    fn context_switch_asm(save_sp: *mut u32, restore_sp: *mut u32);
 }
 
-impl SavedContext {
-    const fn new() -> Self {
-        Self {
-            sp: 0,
-            initialized: false,
-        }
-    }
+/// Size of the sequencer stack in bytes (32KB)
+/// This needs to be large enough for the C BLE stack's call depth,
+/// including connection event processing and HCI event parsing
+/// (the Event enum is ~300+ bytes due to heapless::Vec variants).
+const SEQUENCER_CTX_STACK_SIZE: usize = 32 * 1024;
+
+/// Global sequencer state
+pub(crate) struct ContextManager {
+    /// The sequencer's saved SP
+    task_sp: UnsafeCell<u32>,
+    /// The runner's saved SP
+    runner_sp: UnsafeCell<u32>,
+    /// Current state
+    state: AtomicU8,
+    /// The sequencer's stack (must be 8-byte aligned)
+    task_stack: Aligned<A8, UnsafeCell<[u8; SEQUENCER_CTX_STACK_SIZE]>>,
+    task_entry: extern "C" fn() -> !,
 }
+
+unsafe impl Sync for ContextManager {}
 
 /// Sequencer state
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-enum SequencerState {
+enum ContextManagerState {
     /// Not yet started
     Uninitialized = 0,
     /// Running (in sequencer context)
@@ -68,9 +92,9 @@ enum SequencerState {
     Stopped = 3,
 }
 
-impl SequencerState {
-    fn from_u8(v: u8) -> Self {
-        match v {
+impl From<u8> for ContextManagerState {
+    fn from(value: u8) -> Self {
+        match value {
             0 => Self::Uninitialized,
             1 => Self::Running,
             2 => Self::Yielded,
@@ -80,264 +104,121 @@ impl SequencerState {
     }
 }
 
-/// Global sequencer state
-struct SequencerContext {
-    /// The sequencer's saved context (SP when yielded)
-    seq_ctx: UnsafeCell<SavedContext>,
-    /// The runner's saved context (SP when in sequencer)
-    runner_ctx: UnsafeCell<SavedContext>,
-    /// Current state
-    state: AtomicU8,
-    /// Whether there's pending work
-    has_pending_work: AtomicBool,
-    /// The sequencer's stack (must be 8-byte aligned)
-    stack: UnsafeCell<[u8; SEQUENCER_STACK_SIZE]>,
-}
-
-unsafe impl Sync for SequencerContext {}
-
-impl SequencerContext {
-    const fn new() -> Self {
+impl ContextManager {
+    pub(crate) const fn new(task_entry: extern "C" fn() -> !) -> Self {
         Self {
-            seq_ctx: UnsafeCell::new(SavedContext::new()),
-            runner_ctx: UnsafeCell::new(SavedContext::new()),
-            state: AtomicU8::new(SequencerState::Uninitialized as u8),
-            has_pending_work: AtomicBool::new(false),
-            stack: UnsafeCell::new([0u8; SEQUENCER_STACK_SIZE]),
+            task_sp: UnsafeCell::new(0),
+            runner_sp: UnsafeCell::new(0),
+            state: AtomicU8::new(ContextManagerState::Uninitialized as u8),
+            task_stack: Aligned(UnsafeCell::new([0u8; SEQUENCER_CTX_STACK_SIZE])),
+            task_entry,
         }
     }
 
-    fn state(&self) -> SequencerState {
-        SequencerState::from_u8(self.state.load(Ordering::Acquire))
-    }
+    /// Initialize the sequencer stack
+    fn init_sequencer_stack(&'static self) {
+        // Stack grows downward, so we start at the top
+        // Ensure 8-byte alignment (ARM requirement for function calls)
+        let stack_top = &raw const self.task_stack as usize + SEQUENCER_CTX_STACK_SIZE;
+        let stack_top = (stack_top & !0x7) as u32; // 8-byte align
 
-    fn set_state(&self, state: SequencerState) {
-        self.state.store(state as u8, Ordering::Release);
-    }
-}
+        // Set up fake saved context on sequencer stack.
+        // `pop {r4-r11, lr}` pops 9 words (36 bytes) starting at SP:
+        //   [SP+0]=R4, [SP+4]=R5, ..., [SP+28]=R11, [SP+32]=LR
+        //
+        // Stack layout (growing down):
+        // [stack_top - 4]:  padding (8-byte alignment; entry fn is noreturn)
+        // [stack_top - 8]:  LR = task_entry (popped into LR, then bx lr)
+        // [stack_top - 12]: R11 = 0
+        // [stack_top - 16]: R10 = 0
+        // [stack_top - 20]: R9 = 0
+        // [stack_top - 24]: R8 = 0
+        // [stack_top - 28]: R7 = 0
+        // [stack_top - 32]: R6 = 0
+        // [stack_top - 36]: R5 = 0
+        // [stack_top - 40]: R4 = 0    <-- SP points here
+        unsafe {
+            let mut sp = stack_top;
 
-/// Global sequencer context
-static SEQUENCER: SequencerContext = SequencerContext::new();
+            // Padding for 8-byte alignment
+            sp -= 4;
+            core::ptr::write_volatile(sp as *mut u32, 0);
 
-/// Initialize the sequencer stack
-///
-/// This must be called once before using the sequencer.
-/// Returns the initial stack pointer for the sequencer.
-fn init_sequencer_stack() -> u32 {
-    let stack = unsafe { &mut *SEQUENCER.stack.get() };
+            // LR = entry point with Thumb bit set (required for bx)
+            sp -= 4;
+            core::ptr::write_volatile(sp as *mut u32, self.task_entry as u32 | 1);
 
-    // Stack grows downward, so we start at the top
-    // Ensure 8-byte alignment (ARM requirement for function calls)
-    let stack_top = stack.as_ptr() as usize + SEQUENCER_STACK_SIZE;
-    let aligned_top = stack_top & !0x7; // 8-byte align
-
-    aligned_top as u32
-}
-
-/// Entry point for the sequencer context
-///
-/// This function runs in the sequencer's stack context and repeatedly
-/// polls for pending tasks, yielding when there's nothing to do.
-extern "C" fn sequencer_entry() -> ! {
-    loop {
-        // Poll and execute any pending sequencer tasks
-        super::util_seq::poll_pending_tasks();
-
-        // Yield back to the runner
-        // This will return when the runner resumes us
-        sequencer_yield_inner();
-    }
-}
-
-/// Resume the sequencer from the runner context
-///
-/// This function switches from the runner's context to the sequencer's context.
-/// It returns when the sequencer yields (calls `sequencer_yield`).
-///
-/// # Safety
-///
-/// Must be called from a proper task context with a valid stack.
-pub fn sequencer_resume() {
-    let state = SEQUENCER.state();
-
-    match state {
-        SequencerState::Uninitialized => {
-            // First time - initialize and start the sequencer
-            let stack_top = init_sequencer_stack();
-
-            // Set up initial context for sequencer
-            // We need to set up the stack so that when we "restore" to it,
-            // it will start executing sequencer_entry
-            unsafe {
-                let seq_ctx = &mut *SEQUENCER.seq_ctx.get();
-
-                // Set up fake saved context on sequencer stack
-                // Stack layout (growing down):
-                // [stack_top - 0]:  (8-byte alignment padding if needed)
-                // [stack_top - 4]:  Initial LR (not used, sequencer_entry is noreturn)
-                // [stack_top - 8]:  R11
-                // [stack_top - 12]: R10
-                // [stack_top - 16]: R9
-                // [stack_top - 20]: R8
-                // [stack_top - 24]: R7
-                // [stack_top - 28]: R6
-                // [stack_top - 32]: R5
-                // [stack_top - 36]: R4
-                // SP points here after "restore"
-
-                let mut sp = stack_top;
-
-                // Push a fake return address (entry point)
+            // Fake saved registers R11-R4 (all zeros)
+            for _ in 0..8 {
                 sp -= 4;
-                core::ptr::write_volatile(sp as *mut u32, sequencer_entry as u32);
-
-                // Push fake saved registers R11-R4 (all zeros is fine)
-                for _ in 0..8 {
-                    sp -= 4;
-                    core::ptr::write_volatile(sp as *mut u32, 0);
-                }
-
-                seq_ctx.sp = sp;
-                seq_ctx.initialized = true;
+                core::ptr::write_volatile(sp as *mut u32, 0);
             }
 
-            SEQUENCER.set_state(SequencerState::Yielded);
-
-            // Now do the actual switch
-            do_context_switch();
+            // SP is now stack_top - 40, which is 8-byte aligned
+            core::ptr::write_volatile(self.task_sp.get(), sp);
         }
 
-        SequencerState::Yielded => {
-            // Sequencer has yielded, resume it
-            do_context_switch();
+        self.set_state(ContextManagerState::Yielded);
+    }
+
+    /// Resume the sequencer from the runner context.
+    /// Returns when the sequencer yields.
+    pub(crate) fn task_resume(&'static self) {
+        match self.get_state() {
+            ContextManagerState::Uninitialized => {
+                self.init_sequencer_stack();
+                self.set_state(ContextManagerState::Running);
+                self.do_switch(self.runner_sp.get(), self.task_sp.get());
+                // Returns here when task yields
+            }
+            ContextManagerState::Yielded => {
+                self.set_state(ContextManagerState::Running);
+                self.do_switch(self.runner_sp.get(), self.task_sp.get());
+                // Returns here when task yields
+            }
+            ContextManagerState::Running => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("sequencer_resume called while already running");
+            }
+            ContextManagerState::Stopped => {
+                #[cfg(feature = "defmt")]
+                defmt::warn!("sequencer_resume called after stop");
+            }
+        }
+    }
+
+    /// Yield from the sequencer back to the runner.
+    pub(crate) fn task_yield(&'static self) {
+        if self.get_state() == ContextManagerState::Running {
+            self.set_state(ContextManagerState::Yielded);
+            self.do_switch(self.task_sp.get(), self.runner_sp.get());
+            // Returns here when runner resumes us
+        }
+    }
+
+    #[inline(always)]
+    fn do_switch(&'static self, save_sp: *mut u32, restore_sp: *mut u32) {
+        #[cfg(target_arch = "arm")]
+        unsafe {
+            context_switch_asm(save_sp, restore_sp);
         }
 
-        SequencerState::Running => {
-            // Already running - shouldn't happen
-            #[cfg(feature = "defmt")]
-            defmt::warn!("sequencer_resume called while already running");
-        }
-
-        SequencerState::Stopped => {
-            // Sequencer has stopped - shouldn't happen normally
-            #[cfg(feature = "defmt")]
-            defmt::warn!("sequencer_resume called after stop");
+        #[cfg(not(target_arch = "arm"))]
+        {
+            let _ = (save_sp, restore_sp);
+            panic!("Context switching only supported on ARM");
         }
     }
-}
 
-/// Yield from the sequencer back to the runner
-///
-/// This is called from within the sequencer context when it has no more
-/// work to do (would otherwise WFE).
-fn sequencer_yield_inner() {
-    SEQUENCER.set_state(SequencerState::Yielded);
-    do_context_switch();
-    // When we return here, we've been resumed
-    SEQUENCER.set_state(SequencerState::Running);
-}
-
-/// Public function to yield from sequencer
-///
-/// This should be called instead of WFE when the sequencer is idle.
-pub fn sequencer_yield() {
-    if SEQUENCER.state() == SequencerState::Running {
-        sequencer_yield_inner();
-    }
-}
-
-/// Signal that there's pending work for the sequencer
-pub fn sequencer_wake() {
-    SEQUENCER.has_pending_work.store(true, Ordering::Release);
-    // Send event to wake up WFE if the runner is waiting
-    #[cfg(target_arch = "arm")]
-    cortex_m::asm::sev();
-}
-
-/// Check if there's pending work for the sequencer
-pub fn sequencer_has_pending_work() -> bool {
-    SEQUENCER.has_pending_work.swap(false, Ordering::AcqRel)
-}
-
-/// Perform the actual context switch
-///
-/// This saves the current context and restores the other context.
-/// Works bidirectionally - runner->sequencer and sequencer->runner.
-#[inline(never)]
-fn do_context_switch() {
-    let state = SEQUENCER.state();
-    let switching_to_sequencer = state == SequencerState::Yielded;
-
-    unsafe {
-        let (save_ctx, restore_ctx) = if switching_to_sequencer {
-            (SEQUENCER.runner_ctx.get(), SEQUENCER.seq_ctx.get())
-        } else {
-            (SEQUENCER.seq_ctx.get(), SEQUENCER.runner_ctx.get())
-        };
-
-        if switching_to_sequencer {
-            SEQUENCER.set_state(SequencerState::Running);
-        }
-
-        context_switch(save_ctx, restore_ctx);
-    }
-}
-
-/// Low-level context switch using inline assembly
-///
-/// Saves R4-R11 and SP to `save_ctx`, then restores from `restore_ctx`.
-///
-/// # Safety
-///
-/// Both pointers must be valid SavedContext structures.
-#[inline(never)]
-unsafe fn context_switch(save_ctx: *mut SavedContext, restore_ctx: *mut SavedContext) {
-    #[cfg(target_arch = "arm")]
-    {
-        asm!(
-            // Save current context
-            // Push callee-saved registers R4-R11 onto current stack
-            "push {{r4-r11, lr}}",
-
-            // Save current SP to save_ctx->sp
-            "str sp, [{save_ctx}]",
-
-            // Restore new context
-            // Load SP from restore_ctx->sp
-            "ldr sp, [{restore_ctx}]",
-
-            // Pop callee-saved registers R4-R11 from new stack
-            "pop {{r4-r11, lr}}",
-
-            // Return to new context (via LR we just popped)
-            "bx lr",
-
-            save_ctx = in(reg) save_ctx,
-            restore_ctx = in(reg) restore_ctx,
-            options(noreturn)
-        );
+    pub fn in_task_context(&self) -> bool {
+        self.get_state() == ContextManagerState::Running
     }
 
-    #[cfg(not(target_arch = "arm"))]
-    {
-        // Fallback for non-ARM (e.g., testing on host)
-        let _ = (save_ctx, restore_ctx);
-        panic!("Context switching only supported on ARM");
+    fn get_state(&self) -> ContextManagerState {
+        self.state.load(Ordering::Acquire).into()
     }
-}
 
-/// Check if we're currently in the sequencer context
-pub fn in_sequencer_context() -> bool {
-    SEQUENCER.state() == SequencerState::Running
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_stack_alignment() {
-        let stack_ptr = init_sequencer_stack();
-        assert_eq!(stack_ptr % 8, 0, "Stack must be 8-byte aligned");
+    fn set_state(&self, state: ContextManagerState) {
+        self.state.store(state as u8, Ordering::Release);
     }
 }

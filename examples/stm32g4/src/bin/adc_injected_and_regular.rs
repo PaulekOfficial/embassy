@@ -9,20 +9,24 @@
 use core::cell::RefCell;
 
 use defmt::info;
-use embassy_stm32::adc::{
-    Adc, AdcChannel as _, ConversionTrigger, Exten, InjectedAdc, RegularConversionMode, SampleTime,
-};
+use embassy_stm32::adc::{Adc, AdcChannel as _, Exten, InjectedAdc, SampleTime, VrefInt};
 use embassy_stm32::interrupt::typelevel::{ADC1_2, Interrupt};
 use embassy_stm32::peripherals::ADC1;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::complementary_pwm::{ComplementaryPwm, Mms2};
 use embassy_stm32::timer::low_level::CountingMode;
-use embassy_stm32::{Config, interrupt};
+use embassy_stm32::triggers::TIM1_TRGO2;
+use embassy_stm32::{Config, Peri, bind_interrupts, dma, interrupt, peripherals};
 use embassy_sync::blocking_mutex::CriticalSectionMutex;
+use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 static ADC1_HANDLE: CriticalSectionMutex<RefCell<Option<InjectedAdc<ADC1, 1>>>> =
     CriticalSectionMutex::new(RefCell::new(None));
+
+bind_interrupts!(struct Irqs {
+    DMA1_CHANNEL1 => dma::InterruptHandler<peripherals::DMA1_CH1>;
+});
 
 /// This example showcases how to use both regular ADC conversions with DMA and injected ADC
 /// conversions with ADC interrupt simultaneously. Both conversion types can be configured with
@@ -33,11 +37,6 @@ static ADC1_HANDLE: CriticalSectionMutex<RefCell<Option<InjectedAdc<ADC1, 1>>>> 
 /// to only include one of the ADC conversion types.
 #[embassy_executor::main]
 async fn main(_spawner: embassy_executor::Spawner) {
-    // See Table 166 and 167 in RM0440 Rev 9 for ADC1/2 External triggers
-    // Note: Regular and Injected channels use different tables!!
-    const ADC1_INJECTED_TRIGGER_TIM1_TRGO2: u8 = 8;
-    const ADC1_REGULAR_TRIGGER_TIM1_TRGO2: u8 = 10;
-
     // --- RCC config ---
     let mut config = Config::default();
     {
@@ -79,8 +78,13 @@ async fn main(_spawner: embassy_executor::Spawner) {
     // Configure regular conversions with DMA
     let adc1 = Adc::new(p.ADC1, Default::default());
 
-    let vrefint_channel = adc1.enable_vrefint().degrade_adc();
-    let pa0 = p.PC1.degrade_adc();
+    let vrefint = adc1.enable_vrefint();
+
+    static VREFINT: StaticCell<VrefInt> = StaticCell::new();
+    static PC1: StaticCell<Peri<'static, peripherals::PC1>> = StaticCell::new();
+
+    let vrefint_channel = VREFINT.init(vrefint).degrade_adc();
+    let pa0 = PC1.init(p.PC1).degrade_adc();
     let regular_sequence = [
         (vrefint_channel, SampleTime::CYCLES247_5),
         (pa0, SampleTime::CYCLES247_5),
@@ -88,7 +92,9 @@ async fn main(_spawner: embassy_executor::Spawner) {
     .into_iter();
 
     // Configurations of Injected ADC measurements
-    let pa2 = p.PA2.degrade_adc();
+    static PA2: StaticCell<Peri<'static, peripherals::PA2>> = StaticCell::new();
+
+    let pa2 = PA2.init(p.PA2).degrade_adc();
     let injected_sequence = [(pa2, SampleTime::CYCLES247_5)];
 
     // Configure DMA for retrieving regular ADC measurements
@@ -96,22 +102,16 @@ async fn main(_spawner: embassy_executor::Spawner) {
     // Using buffer of double size means the half-full interrupts will generate at the expected rate
     let mut readings = [0u16; 4];
 
-    let injected_trigger = ConversionTrigger {
-        channel: ADC1_INJECTED_TRIGGER_TIM1_TRGO2,
-        edge: Exten::RISING_EDGE,
-    };
-    let regular_trigger = ConversionTrigger {
-        channel: ADC1_REGULAR_TRIGGER_TIM1_TRGO2,
-        edge: Exten::RISING_EDGE,
-    };
-
     let (mut ring_buffered_adc, injected_adc) = adc1.into_ring_buffered_and_injected(
         dma1_ch1,
         &mut readings,
+        Irqs,
         regular_sequence,
-        RegularConversionMode::Triggered(regular_trigger),
+        TIM1_TRGO2,
+        Exten::RISING_EDGE,
         injected_sequence,
-        injected_trigger,
+        TIM1_TRGO2,
+        Exten::RISING_EDGE,
         true,
     );
 

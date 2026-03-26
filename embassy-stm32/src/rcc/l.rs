@@ -6,6 +6,10 @@ pub use crate::pac::rcc::vals::Hsepre as HsePrescaler;
 pub use crate::pac::rcc::vals::{Hpre as AHBPrescaler, Msirange as MSIRange, Ppre as APBPrescaler, Sw as Sysclk};
 use crate::pac::{FLASH, RCC};
 use crate::rcc::LSI_FREQ;
+#[cfg(dsihost)]
+use crate::rcc::dsi;
+#[cfg(dsihost)]
+pub use crate::rcc::dsi::{DsiHostPllConfig, DsiPllInput, DsiPllNdiv, DsiPllOutput};
 use crate::time::Hertz;
 
 /// HSI speed
@@ -61,6 +65,9 @@ pub struct Config {
     // low speed LSI/LSE/RTC
     pub ls: super::LsConfig,
 
+    #[cfg(dsihost)]
+    pub dsi: Option<DsiHostPllConfig>,
+
     #[cfg(any(stm32l0, stm32l1))]
     pub voltage_scale: VoltageScale,
 
@@ -83,6 +90,8 @@ impl Config {
             core2_ahb_pre: AHBPrescaler::DIV1,
             #[cfg(any(stm32wl, stm32wb))]
             shared_ahb_pre: AHBPrescaler::DIV1,
+            #[cfg(dsihost)]
+            dsi: None,
             pll: None,
             #[cfg(any(stm32l4, stm32l5, stm32wb))]
             pllsai1: None,
@@ -269,11 +278,29 @@ pub(crate) unsafe fn init(config: Config) {
         #[cfg(any(stm32l4, stm32l5, stm32wb, stm32wl, stm32u0))]
         msi,
     };
-    let pll = init_pll(PllInstance::Pll, config.pll, &pll_input);
+    let pll = config.pll.map_or_else(
+        || {
+            pll_enable(PllInstance::Pll, false);
+            PllOutput::default()
+        },
+        |c| init_pll(PllInstance::Pll, Some(c), &pll_input),
+    );
     #[cfg(any(stm32l4, stm32l5, stm32wb))]
-    let pllsai1 = init_pll(PllInstance::Pllsai1, config.pllsai1, &pll_input);
+    let pllsai1 = config.pllsai1.map_or_else(
+        || {
+            pll_enable(PllInstance::Pllsai1, false);
+            PllOutput::default()
+        },
+        |c| init_pll(PllInstance::Pllsai1, Some(c), &pll_input),
+    );
     #[cfg(any(stm32l47x, stm32l48x, stm32l49x, stm32l4ax, rcc_l4plus, stm32l5))]
-    let pllsai2 = init_pll(PllInstance::Pllsai2, config.pllsai2, &pll_input);
+    let pllsai2 = config.pllsai2.map_or_else(
+        || {
+            pll_enable(PllInstance::Pllsai2, false);
+            PllOutput::default()
+        },
+        |c| init_pll(PllInstance::Pllsai2, Some(c), &pll_input),
+    );
 
     let sys_clk = match config.sys {
         Sysclk::HSE => hse.unwrap(),
@@ -449,7 +476,7 @@ pub(crate) unsafe fn init(config: Config) {
         pllsai2_r: pllsai2.r,
 
         #[cfg(dsihost)]
-        dsi_phy: None, // DSI PLL clock not supported, don't call `RccPeripheral::frequency()` in the drivers
+        dsi_phy: config.dsi.map(|config| dsi::configure_pll(hse, config)),
 
         rtc: rtc,
         lse: lse,

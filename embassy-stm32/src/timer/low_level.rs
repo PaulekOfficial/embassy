@@ -9,6 +9,8 @@
 use core::mem::ManuallyDrop;
 
 use embassy_hal_internal::Peri;
+#[cfg(not(stm32l0))]
+pub use stm32_metapac::timer::vals::{Bkinp as BreakComparatorPolarity, Bkp as BreakInputPolarity};
 // Re-export useful enums
 pub use stm32_metapac::timer::vals::{FilterValue, Mms as MasterMode, Sms as SlaveMode, Ts as TriggerSource};
 
@@ -186,6 +188,22 @@ pub enum OutputCompareMode {
     /// tim_oc1ref has the same behavior as in PWM mode 2. tim_oc1refc outputs tim_oc1ref
     /// when the counter is counting up, tim_oc2ref when it is counting down.
     AsymmetricPwmMode2,
+}
+
+#[cfg(timer_v3)]
+impl From<OutputCompareMode> for crate::pac::timer::vals::OcmGp {
+    fn from(mode: OutputCompareMode) -> Self {
+        match mode {
+            OutputCompareMode::Frozen => crate::pac::timer::vals::OcmGp::FROZEN,
+            OutputCompareMode::ActiveOnMatch => crate::pac::timer::vals::OcmGp::ACTIVE_ON_MATCH,
+            OutputCompareMode::InactiveOnMatch => crate::pac::timer::vals::OcmGp::INACTIVE_ON_MATCH,
+            OutputCompareMode::Toggle => crate::pac::timer::vals::OcmGp::TOGGLE,
+            OutputCompareMode::ForceInactive => crate::pac::timer::vals::OcmGp::FORCE_INACTIVE,
+            OutputCompareMode::ForceActive => crate::pac::timer::vals::OcmGp::FORCE_ACTIVE,
+            OutputCompareMode::PwmMode1 => crate::pac::timer::vals::OcmGp::PWM_MODE1,
+            OutputCompareMode::PwmMode2 => crate::pac::timer::vals::OcmGp::PWM_MODE2,
+        }
+    }
 }
 
 impl From<OutputCompareMode> for crate::pac::timer::vals::Ocm {
@@ -814,9 +832,10 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
     }
 
     /// Setup a ring buffer for the channel
-    pub fn setup_ring_buffer<'a, W: Word + Into<T::Word>>(
+    pub fn setup_ring_buffer<'a, W: Word + Into<T::Word>, D: super::UpDma<T>>(
         &mut self,
-        dma: Peri<'a, impl super::UpDma<T>>,
+        dma: Peri<'a, D>,
+        irq: impl crate::interrupt::typelevel::Binding<D::Interrupt, crate::dma::InterruptHandler<D>> + 'a,
         channel: Channel,
         dma_buf: &'a mut [W],
     ) -> WritableRingBuffer<'a, W> {
@@ -837,7 +856,7 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
             };
 
             WritableRingBuffer::new(
-                dma,
+                dma::Channel::new(dma, irq),
                 req,
                 self.regs_1ch().ccr(channel.index()).as_ptr() as *mut W,
                 dma_buf,
@@ -850,39 +869,42 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
     ///
     /// Note:
     /// you will need to provide corresponding TIMx_UP DMA channel to use this method.
-    pub fn setup_update_dma<'a, W: Word + Into<T::Word>>(
+    pub fn setup_update_dma<'a, W: Word + Into<T::Word>, D: super::UpDma<T>>(
         &mut self,
-        dma: Peri<'a, impl super::UpDma<T>>,
+        dma: Peri<'a, D>,
+        irq: impl crate::interrupt::typelevel::Binding<D::Interrupt, crate::dma::InterruptHandler<D>> + 'a,
         channel: Channel,
         duty: &'a [W],
     ) -> Transfer<'a> {
-        self.setup_update_dma_inner(dma.request(), dma, channel, duty)
+        self.setup_update_dma_inner(dma.request(), dma, irq, channel, duty)
     }
 
     /// Generate a sequence of PWM waveform
     ///
     /// Note:
     /// The DMA channel provided does not need to correspond to the requested channel.
-    pub fn setup_channel_update_dma<'a, C: TimerChannel, W: Word + Into<T::Word>>(
+    pub fn setup_channel_update_dma<'a, C: TimerChannel, W: Word + Into<T::Word>, D: super::Dma<T, C>>(
         &mut self,
-        dma: Peri<'a, impl super::Dma<T, C>>,
+        dma: Peri<'a, D>,
+        irq: impl crate::interrupt::typelevel::Binding<D::Interrupt, crate::dma::InterruptHandler<D>> + 'a,
         channel: Channel,
         duty: &'a [W],
     ) -> Transfer<'a> {
-        self.setup_update_dma_inner(dma.request(), dma, channel, duty)
+        self.setup_update_dma_inner(dma.request(), dma, irq, channel, duty)
     }
 
-    fn setup_update_dma_inner<'a, W: Word + Into<T::Word>>(
+    fn setup_update_dma_inner<'a, W: Word + Into<T::Word>, D: dma::ChannelInstance>(
         &mut self,
         request: dma::Request,
-        dma: Peri<'a, impl dma::Channel>,
+        dma: Peri<'a, D>,
+        irq: impl crate::interrupt::typelevel::Binding<D::Interrupt, crate::dma::InterruptHandler<D>> + 'a,
         channel: Channel,
         duty: &'a [W],
     ) -> Transfer<'a> {
         unsafe {
+            use crate::dma::TransferOptions;
             #[cfg(not(any(bdma, gpdma)))]
             use crate::dma::{Burst, FifoThreshold};
-            use crate::dma::{Transfer, TransferOptions};
 
             let dma_transfer_option = TransferOptions {
                 #[cfg(not(any(bdma, gpdma)))]
@@ -892,13 +914,15 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
                 ..Default::default()
             };
 
-            Transfer::new_write(
-                dma,
-                request,
-                duty,
-                self.regs_gp16().ccr(channel.index()).as_ptr() as *mut W,
-                dma_transfer_option,
-            )
+            let mut dma_channel = dma::Channel::new(dma, irq);
+            dma_channel
+                .write(
+                    request,
+                    duty,
+                    self.regs_gp16().ccr(channel.index()).as_ptr() as *mut W,
+                    dma_transfer_option,
+                )
+                .unchecked_extend_lifetime()
         }
     }
 
@@ -931,9 +955,10 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
     /// Also be aware that embassy timers use one of timers internally. It is possible to
     /// switch this timer by using `time-driver-timX` feature.
     ///
-    pub fn setup_update_dma_burst<'a, W: Word + Into<T::Word>>(
+    pub fn setup_update_dma_burst<'a, W: Word + Into<T::Word>, D: super::UpDma<T>>(
         &mut self,
-        dma: Peri<'a, impl super::UpDma<T>>,
+        dma: Peri<'a, D>,
+        irq: impl crate::interrupt::typelevel::Binding<D::Interrupt, crate::dma::InterruptHandler<D>> + 'a,
         starting_channel: Channel,
         ending_channel: Channel,
         duty: &'a [W],
@@ -956,9 +981,9 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
         let req = dma.request();
 
         unsafe {
+            use crate::dma::TransferOptions;
             #[cfg(not(any(bdma, gpdma)))]
             use crate::dma::{Burst, FifoThreshold};
-            use crate::dma::{Transfer, TransferOptions};
 
             let dma_transfer_option = TransferOptions {
                 #[cfg(not(any(bdma, gpdma)))]
@@ -968,13 +993,15 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
                 ..Default::default()
             };
 
-            Transfer::new_write(
-                dma,
-                req,
-                duty,
-                self.regs_gp16().dmar().as_ptr() as *mut W,
-                dma_transfer_option,
-            )
+            let mut dma_channel = dma::Channel::new(dma, irq);
+            dma_channel
+                .write(
+                    req,
+                    duty,
+                    self.regs_gp16().dmar().as_ptr() as *mut W,
+                    dma_transfer_option,
+                )
+                .unchecked_extend_lifetime()
         }
     }
 
@@ -1024,6 +1051,32 @@ impl<'d, T: GeneralInstance4Channel> Timer<'d, T> {
     /// Set Timer Trigger Source
     pub fn set_trigger_source(&self, ts: TriggerSource) {
         self.regs_gp16().smcr().modify(|r| r.set_ts(ts));
+    }
+
+    /// Set Timer Etr_in Source
+    #[cfg(not(stm32l0))]
+    pub fn set_etr_in_source(&self, val: u8) {
+        self.regs_gp16().af1().modify(|w| w.set_etrsel(val));
+    }
+
+    /// Set Timer External Trigger Filter
+    pub fn set_external_trigger_filter(&self, fv: FilterValue) {
+        self.regs_gp16().smcr().modify(|w| w.set_etf(fv));
+    }
+
+    /// Set Timer External Trigger prescaler
+    pub fn set_external_trigger_prescaler(&self, etp: vals::Etps) {
+        self.regs_gp16().smcr().modify(|w| w.set_etps(etp));
+    }
+
+    /// Set Timer External Trigger Polarity
+    pub fn set_external_trigger_polarity(&self, etp: vals::Etp) {
+        self.regs_gp16().smcr().modify(|w| w.set_etp(etp));
+    }
+
+    /// Set Timer External Clock Mode 2 Enable state
+    pub fn set_external_clock_mode_2_enable_state(&self, val: bool) {
+        self.regs_gp16().smcr().modify(|w| w.set_ece(val));
     }
 }
 
@@ -1091,6 +1144,98 @@ impl<'d, T: AdvancedInstance1Channel> Timer<'d, T> {
     pub fn get_moe(&self) -> bool {
         self.regs_1ch_cmp().bdtr().read().moe()
     }
+
+    /// Enable/disable break input 1.
+    ///
+    /// When enabled, an active level on the break input puts the timer outputs
+    /// into a safe state (driven by OSSI/OSSR and OIS/OISN settings).
+    pub fn set_break_enable(&self, enable: bool) {
+        self.regs_1ch_cmp().bdtr().modify(|w| w.set_bke(0, enable));
+    }
+
+    /// Get break input 1 enable state.
+    pub fn get_break_enable(&self) -> bool {
+        self.regs_1ch_cmp().bdtr().read().bke(0)
+    }
+
+    /// Set break input 1 polarity.
+    pub fn set_break_polarity(&self, polarity: vals::Bkp) {
+        self.regs_1ch_cmp().bdtr().modify(|w| w.set_bkp(0, polarity));
+    }
+
+    /// Get break input 1 polarity.
+    pub fn get_break_polarity(&self) -> vals::Bkp {
+        self.regs_1ch_cmp().bdtr().read().bkp(0)
+    }
+
+    /// Set break input 1 digital filter.
+    ///
+    /// The filter rejects glitches shorter than the configured number of clock
+    /// cycles, preventing false break events from noise.
+    pub fn set_break_filter(&self, filter: FilterValue) {
+        self.regs_1ch_cmp().bdtr().modify(|w| w.set_bkf(0, filter));
+    }
+
+    /// Get break input 1 digital filter.
+    pub fn get_break_filter(&self) -> FilterValue {
+        self.regs_1ch_cmp().bdtr().read().bkf(0)
+    }
+
+    /// Enable/disable automatic output enable (AOE).
+    ///
+    /// When AOE is set, the MOE bit is automatically set at the next update
+    /// event after a break event (allowing automatic recovery). When cleared,
+    /// MOE can only be set by software.
+    pub fn set_automatic_output_enable(&self, enable: bool) {
+        self.regs_1ch_cmp().bdtr().modify(|w| w.set_aoe(enable));
+    }
+
+    /// Get automatic output enable (AOE) state.
+    pub fn get_automatic_output_enable(&self) -> bool {
+        self.regs_1ch_cmp().bdtr().read().aoe()
+    }
+
+    /// Enable/disable comparator output as break input 1 source.
+    ///
+    /// When enabled, the output of comparator `comp_index` (0-based: 0=COMP1, 1=COMP2, etc.)
+    /// is internally OR'd into the break input 1 signal. Multiple comparators can be
+    /// enabled simultaneously. This is configured via the TIMx_AF1 register BKCMPE bits.
+    ///
+    /// No GPIO pin is needed — the routing is fully internal.
+    pub fn set_break_comparator_enable(&self, comp_index: usize, enable: bool) {
+        self.regs_1ch_cmp().af1().modify(|w| w.set_bkcmpe(comp_index, enable));
+    }
+
+    /// Get comparator break input 1 enable state.
+    pub fn get_break_comparator_enable(&self, comp_index: usize) -> bool {
+        self.regs_1ch_cmp().af1().read().bkcmpe(comp_index)
+    }
+
+    /// Set comparator break input 1 polarity.
+    ///
+    /// Controls the polarity of comparator `comp_index` (0-based, max 3) output
+    /// when used as a break source. Only COMP1-COMP4 have individual polarity control.
+    pub fn set_break_comparator_polarity(&self, comp_index: usize, polarity: vals::Bkinp) {
+        self.regs_1ch_cmp().af1().modify(|w| w.set_bkcmpp(comp_index, polarity));
+    }
+
+    /// Get comparator break input 1 polarity.
+    pub fn get_break_comparator_polarity(&self, comp_index: usize) -> vals::Bkinp {
+        self.regs_1ch_cmp().af1().read().bkcmpp(comp_index)
+    }
+
+    /// Enable/disable the external BKIN pin as break input 1 source.
+    ///
+    /// This controls whether the TIMx_BKIN GPIO pin contributes to the break input.
+    /// When using only comparator-based break sources, this can be disabled.
+    pub fn set_break_input_pin_enable(&self, enable: bool) {
+        self.regs_1ch_cmp().af1().modify(|w| w.set_bkine(enable));
+    }
+
+    /// Get external BKIN pin enable state.
+    pub fn get_break_input_pin_enable(&self) -> bool {
+        self.regs_1ch_cmp().af1().read().bkine()
+    }
 }
 
 #[cfg(not(stm32l0))]
@@ -1146,10 +1291,78 @@ impl<'d, T: AdvancedInstance4Channel> Timer<'d, T> {
         self.regs_advanced().rcr().modify(|w| w.set_rep(val));
     }
 
+    /// Enable/disable break input 2.
+    ///
+    /// When enabled, an active level on break input 2 puts the timer outputs
+    /// into a safe state. Only available on advanced 4-channel timers.
+    pub fn set_break2_enable(&self, enable: bool) {
+        self.regs_advanced().bdtr().modify(|w| w.set_bke(1, enable));
+    }
+
+    /// Get break input 2 enable state.
+    pub fn get_break2_enable(&self) -> bool {
+        self.regs_advanced().bdtr().read().bke(1)
+    }
+
+    /// Set break input 2 polarity.
+    pub fn set_break2_polarity(&self, polarity: vals::Bkp) {
+        self.regs_advanced().bdtr().modify(|w| w.set_bkp(1, polarity));
+    }
+
+    /// Get break input 2 polarity.
+    pub fn get_break2_polarity(&self) -> vals::Bkp {
+        self.regs_advanced().bdtr().read().bkp(1)
+    }
+
+    /// Set break input 2 digital filter.
+    pub fn set_break2_filter(&self, filter: FilterValue) {
+        self.regs_advanced().bdtr().modify(|w| w.set_bkf(1, filter));
+    }
+
+    /// Get break input 2 digital filter.
+    pub fn get_break2_filter(&self) -> FilterValue {
+        self.regs_advanced().bdtr().read().bkf(1)
+    }
+
     /// Trigger software break 1 or 2
     /// Setting this bit generates a break event. This bit is automatically cleared by the hardware.
     pub fn trigger_software_break(&self, n: usize) {
         self.regs_advanced().egr().write(|r| r.set_bg(n, true));
+    }
+
+    /// Enable/disable comparator output as break input 2 source.
+    ///
+    /// When enabled, the output of comparator `comp_index` (0-based: 0=COMP1, 1=COMP2, etc.)
+    /// is internally OR'd into the break input 2 signal. Configured via TIMx_AF2 register.
+    pub fn set_break2_comparator_enable(&self, comp_index: usize, enable: bool) {
+        self.regs_advanced().af2().modify(|w| w.set_bk2cmpe(comp_index, enable));
+    }
+
+    /// Get comparator break input 2 enable state.
+    pub fn get_break2_comparator_enable(&self, comp_index: usize) -> bool {
+        self.regs_advanced().af2().read().bk2cmpe(comp_index)
+    }
+
+    /// Set comparator break input 2 polarity.
+    pub fn set_break2_comparator_polarity(&self, comp_index: usize, polarity: vals::Bkinp) {
+        self.regs_advanced()
+            .af2()
+            .modify(|w| w.set_bk2cmpp(comp_index, polarity));
+    }
+
+    /// Get comparator break input 2 polarity.
+    pub fn get_break2_comparator_polarity(&self, comp_index: usize) -> vals::Bkinp {
+        self.regs_advanced().af2().read().bk2cmpp(comp_index)
+    }
+
+    /// Enable/disable the external BK2IN pin as break input 2 source.
+    pub fn set_break2_input_pin_enable(&self, enable: bool) {
+        self.regs_advanced().af2().modify(|w| w.set_bk2ine(enable));
+    }
+
+    /// Get external BK2IN pin enable state.
+    pub fn get_break2_input_pin_enable(&self) -> bool {
+        self.regs_advanced().af2().read().bk2ine()
     }
 }
 

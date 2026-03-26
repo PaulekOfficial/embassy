@@ -150,7 +150,13 @@ pub(crate) unsafe fn init(config: Config) {
 
     let pll_input = PllInput { hse, hsi };
 
-    let pll1 = init_pll(config.pll1, &pll_input, config.voltage_scale);
+    let pll1 = config.pll1.map_or_else(
+        || {
+            pll_enable(false);
+            PllOutput::default()
+        },
+        |c| init_pll(Some(c), &pll_input, config.voltage_scale),
+    );
 
     let sys_clk = match config.sys {
         Sysclk::HSE => hse.unwrap(),
@@ -268,6 +274,7 @@ pub(crate) unsafe fn init(config: Config) {
     };
 
     let lsi = config.ls.lsi.then_some(LSI_FREQ);
+    let lse = config.ls.lse.map(|c| c.frequency);
 
     // Disable HSI if not used
     if !config.hsi {
@@ -290,13 +297,12 @@ pub(crate) unsafe fn init(config: Config) {
         rtc: rtc,
         hse: hse,
         lsi: lsi,
+        lse: lse,
         hsi: hsi,
         pll1_p: pll1.p,
         pll1_q: pll1.q,
         pll1_r: pll1.r,
 
-        // TODO
-        lse: None,
         #[cfg(sai_v4_2pdm)]
         audioclk: audioclk,
     );

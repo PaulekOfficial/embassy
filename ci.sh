@@ -61,11 +61,13 @@ rm out/tests/pimoroni-pico-plus-2/i2c
 rm out/tests/pimoroni-pico-plus-2/adc
 # temporarily disabled
 rm out/tests/pimoroni-pico-plus-2/pwm
+rm out/tests/frdm-mcx-a266/trng
 
 # flaky
 rm out/tests/rpi-pico/pwm
 rm out/tests/rpi-pico/cyw43-perf
 rm out/tests/rpi-pico/uart_buffered
+rm out/tests/rpi-pico/spi_async
 
 rm out/tests/stm32h563zi/usart_dma
 

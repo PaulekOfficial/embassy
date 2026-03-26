@@ -4,19 +4,28 @@
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::cordic::{self, utils};
+use embassy_stm32::{bind_interrupts, dma, peripherals};
 use {defmt_rtt as _, panic_probe as _};
+
+bind_interrupts!(struct Irqs {
+    GPDMA1_CHANNEL0 => dma::InterruptHandler<peripherals::GPDMA1_CH0>;
+    GPDMA1_CHANNEL1 => dma::InterruptHandler<peripherals::GPDMA1_CH1>;
+});
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let mut dp = embassy_stm32::init(Default::default());
 
+    // Create CORDIC with 2-arg, 2-result config for the initial call (sets ARG2)
     let mut cordic = cordic::Cordic::new(
         dp.CORDIC.reborrow(),
         unwrap!(cordic::Config::new(
             cordic::Function::Sin,
             Default::default(),
             Default::default(),
-        )),
+        ))
+        .arg_count(cordic::AccessCount::Two)
+        .res_count(cordic::AccessCount::Two),
     );
 
     // for output buf, the length is not that strict, larger than minimal required is ok.
@@ -39,8 +48,6 @@ async fn main(_spawner: Spawner) {
     let cnt0 = unwrap!(cordic.blocking_calc_32bit(
         &input_buf[..2], // input length is strict, since driver use its length to detect calculation count
         &mut output_u32,
-        false,
-        false
     ));
 
     // convert result from fixed point into floating point
@@ -55,16 +62,18 @@ async fn main(_spawner: Spawner) {
         *u32_val = unwrap!(utils::f64_to_q1_31(f64_val));
     }
 
+    // Switch to 1-arg mode (reuse ARG2 set above) without resetting ARG2
+    cordic.set_access_counts(cordic::AccessCount::One, cordic::AccessCount::Two);
+
     // If calculation is a little longer, async mode can make use of DMA, and let core do some other stuff.
     let cnt1 = unwrap!(
         cordic
             .async_calc_32bit(
                 dp.GPDMA1_CH0.reborrow(),
                 dp.GPDMA1_CH1.reborrow(),
+                Irqs,
                 &input_buf[..arg1.len() - 1], // limit input buf to its actual length
                 &mut output_u32,
-                true,
-                false
             )
             .await
     );

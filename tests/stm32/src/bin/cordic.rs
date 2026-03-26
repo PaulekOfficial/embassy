@@ -1,6 +1,6 @@
 // required-features: rng, cordic
 
-// Test Cordic driver, with Q1.31 format, Sin function, at 24 iterations (aka PRECISION = 6), using DMA transfer
+// Test Cordic driver, with Q1.31 format, Sin function, at 24 iterations (aka PRECISION = 6)
 
 #![no_std]
 #![no_main]
@@ -10,26 +10,28 @@ mod common;
 use common::*;
 use embassy_executor::Spawner;
 use embassy_stm32::cordic::utils;
-use embassy_stm32::{bind_interrupts, cordic, peripherals, rng};
+use embassy_stm32::{cordic, rng};
 use num_traits::Float;
 use {defmt_rtt as _, panic_probe as _};
-
-bind_interrupts!(struct Irqs {
-   RNG => rng::InterruptHandler<peripherals::RNG>;
-});
 
 /* input value control, can be changed */
 
 const INPUT_U32_COUNT: usize = 9;
 const INPUT_U8_COUNT: usize = 4 * INPUT_U32_COUNT;
 
-// Assume first calculation needs 2 arguments, the reset needs 1 argument.
-// And all calculation generate 2 results.
+// Assume first calculation needs 2 arguments, the rest needs 1 argument.
+// And all calculations generate 2 results.
 const OUTPUT_LENGTH: usize = (INPUT_U32_COUNT - 1) * 2;
 
-#[embassy_executor::main]
+#[cfg_attr(
+    feature = "stop",
+    embassy_executor::main(executor = "embassy_stm32::executor::Executor", entry = "cortex_m_rt::entry")
+)]
+#[cfg_attr(not(feature = "stop"), embassy_executor::main)]
 async fn main(_spawner: Spawner) {
     let dp = init();
+
+    let irq = irqs!(UART);
 
     //
     // use RNG generate random Q1.31 value
@@ -37,7 +39,7 @@ async fn main(_spawner: Spawner) {
     // we don't generate floating-point value, since not all binary value are valid floating-point value,
     // and Q1.31 only accept a fixed range of value.
 
-    let mut rng = rng::Rng::new(dp.RNG, Irqs);
+    let mut rng = rng::Rng::new(dp.RNG, irq);
 
     let mut input_buf_u8 = [0u8; INPUT_U8_COUNT];
     defmt::unwrap!(rng.async_fill_bytes(&mut input_buf_u8).await);
@@ -54,15 +56,23 @@ async fn main(_spawner: Spawner) {
 
     let mut output_q1_31 = [0u32; OUTPUT_LENGTH];
 
-    // setup Cordic driver
+    // setup Cordic driver with 2-arg, 2-result config for the initial call
     let mut cordic = cordic::Cordic::new(
         dp.CORDIC,
         defmt::unwrap!(cordic::Config::new(
             cordic::Function::Sin,
             Default::default(),
             Default::default(),
-        )),
+        ))
+        .arg_count(cordic::AccessCount::Two)
+        .res_count(cordic::AccessCount::Two),
     );
+
+    // calculate first result using blocking mode (2 args: ARG1 + ARG2)
+    let cnt0 = defmt::unwrap!(cordic.blocking_calc_32bit(&input_q1_31[..2], &mut output_q1_31));
+
+    // switch to 1-arg mode without resetting ARG2
+    cordic.set_access_counts(cordic::AccessCount::One, cordic::AccessCount::Two);
 
     #[cfg(feature = "stm32g491re")]
     let (mut write_dma, mut read_dma) = (dp.DMA1_CH4, dp.DMA1_CH5);
@@ -75,19 +85,15 @@ async fn main(_spawner: Spawner) {
     ))]
     let (mut write_dma, mut read_dma) = (dp.GPDMA1_CH0, dp.GPDMA1_CH1);
 
-    // calculate first result using blocking mode
-    let cnt0 = defmt::unwrap!(cordic.blocking_calc_32bit(&input_q1_31[..2], &mut output_q1_31, false, false));
-
-    // calculate rest results using async mode
+    // calculate rest results using async mode (1 arg, reusing ARG2)
     let cnt1 = defmt::unwrap!(
         cordic
             .async_calc_32bit(
                 write_dma.reborrow(),
                 read_dma.reborrow(),
+                irq,
                 &input_q1_31[2..],
                 &mut output_q1_31[cnt0..],
-                true,
-                false,
             )
             .await
     );

@@ -10,7 +10,7 @@ use crate::Peri;
 use crate::dma::word::Word;
 #[cfg(gpio_v2)]
 use crate::gpio::Pull;
-use crate::gpio::{AfType, AnyPin, OutputType, Speed};
+use crate::gpio::{AfType, Flex, OutputType, Speed};
 use crate::pac::timer::vals::Ccds;
 use crate::time::Hertz;
 
@@ -19,7 +19,7 @@ use crate::time::Hertz;
 /// This wraps a pin to make it usable with PWM.
 pub struct PwmPin<'d, T, C, #[cfg(afio)] A> {
     #[allow(unused)]
-    pub(crate) pin: Peri<'d, AnyPin>,
+    pub(crate) pin: Flex<'d>,
     phantom: PhantomData<if_afio!((T, C, A))>,
 }
 
@@ -46,7 +46,7 @@ impl<'d, T: GeneralInstance4Channel, C: TimerChannel, #[cfg(afio)] A> if_afio!(P
             set_as_af!(pin, AfType::output(output_type, Speed::VeryHigh));
         });
         PwmPin {
-            pin: pin.into(),
+            pin: Flex::new(pin),
             phantom: PhantomData,
         }
     }
@@ -64,7 +64,7 @@ impl<'d, T: GeneralInstance4Channel, C: TimerChannel, #[cfg(afio)] A> if_afio!(P
             );
         });
         PwmPin {
-            pin: pin.into(),
+            pin: Flex::new(pin),
             phantom: PhantomData,
         }
     }
@@ -78,6 +78,7 @@ impl<'d, T: GeneralInstance4Channel, C: TimerChannel, #[cfg(afio)] A> if_afio!(P
 pub struct SimplePwmChannel<'d, T: GeneralInstance4Channel> {
     timer: ManuallyDrop<Timer<'d, T>>,
     channel: Channel,
+    _pin: Option<Flex<'d>>,
 }
 
 // TODO: check for RMW races
@@ -176,10 +177,11 @@ impl<'d, T: GeneralInstance4Channel> SimplePwmChannel<'d, T> {
     ///
     /// # Panics
     /// Panics if `dma_buf` is empty or longer than 65535 elements.
-    pub fn into_ring_buffered_channel<W: Word + Into<T::Word>>(
+    pub fn into_ring_buffered_channel<W: Word + Into<T::Word>, D: super::UpDma<T>>(
         mut self,
-        tx_dma: Peri<'d, impl super::UpDma<T>>,
+        tx_dma: Peri<'d, D>,
         dma_buf: &'d mut [W],
+        irq: impl crate::interrupt::typelevel::Binding<D::Interrupt, crate::dma::InterruptHandler<D>> + 'd,
     ) -> RingBufferedPwmChannel<'d, T, W> {
         assert!(!dma_buf.is_empty() && dma_buf.len() <= 0xFFFF);
 
@@ -189,7 +191,7 @@ impl<'d, T: GeneralInstance4Channel> SimplePwmChannel<'d, T> {
         RingBufferedPwmChannel::new(
             unsafe { self.timer.clone_unchecked() },
             self.channel,
-            self.timer.setup_ring_buffer(tx_dma, self.channel, dma_buf),
+            self.timer.setup_ring_buffer(tx_dma, irq, self.channel, dma_buf),
         )
     }
 }
@@ -209,6 +211,10 @@ pub struct SimplePwmChannels<'d, T: GeneralInstance4Channel> {
 /// Simple PWM driver.
 pub struct SimplePwm<'d, T: GeneralInstance4Channel> {
     inner: Timer<'d, T>,
+    ch1: Option<Flex<'d>>,
+    ch2: Option<Flex<'d>>,
+    ch3: Option<Flex<'d>>,
+    ch4: Option<Flex<'d>>,
 }
 
 impl<'d, T: GeneralInstance4Channel> SimplePwm<'d, T> {
@@ -223,11 +229,33 @@ impl<'d, T: GeneralInstance4Channel> SimplePwm<'d, T> {
         freq: Hertz,
         counting_mode: CountingMode,
     ) -> Self {
-        Self::new_inner(tim, freq, counting_mode)
+        Self::new_inner(
+            tim,
+            ch1.map(|pin| pin.pin),
+            ch2.map(|pin| pin.pin),
+            ch3.map(|pin| pin.pin),
+            ch4.map(|pin| pin.pin),
+            freq,
+            counting_mode,
+        )
     }
 
-    fn new_inner(tim: Peri<'d, T>, freq: Hertz, counting_mode: CountingMode) -> Self {
-        let mut this = Self { inner: Timer::new(tim) };
+    fn new_inner(
+        tim: Peri<'d, T>,
+        ch1: Option<Flex<'d>>,
+        ch2: Option<Flex<'d>>,
+        ch3: Option<Flex<'d>>,
+        ch4: Option<Flex<'d>>,
+        freq: Hertz,
+        counting_mode: CountingMode,
+    ) -> Self {
+        let mut this = Self {
+            inner: Timer::new(tim),
+            ch1,
+            ch2,
+            ch3,
+            ch4,
+        };
 
         this.inner.set_counting_mode(counting_mode);
         this.set_frequency(freq);
@@ -256,6 +284,7 @@ impl<'d, T: GeneralInstance4Channel> SimplePwm<'d, T> {
         SimplePwmChannel {
             timer: unsafe { self.inner.clone_unchecked() },
             channel,
+            _pin: None,
         }
     }
 
@@ -308,16 +337,17 @@ impl<'d, T: GeneralInstance4Channel> SimplePwm<'d, T> {
         // without this, the timer would be disabled at the end of this function
         let timer = ManuallyDrop::new(self.inner);
 
-        let ch = |channel| SimplePwmChannel {
+        let ch = |channel, pin| SimplePwmChannel {
             timer: unsafe { timer.clone_unchecked() },
             channel,
+            _pin: pin,
         };
 
         SimplePwmChannels {
-            ch1: ch(Channel::Ch1),
-            ch2: ch(Channel::Ch2),
-            ch3: ch(Channel::Ch3),
-            ch4: ch(Channel::Ch4),
+            ch1: ch(Channel::Ch1, self.ch1),
+            ch2: ch(Channel::Ch2, self.ch2),
+            ch3: ch(Channel::Ch3, self.ch3),
+            ch4: ch(Channel::Ch4, self.ch4),
         }
     }
 
@@ -421,9 +451,10 @@ impl<'d, T: GeneralInstance4Channel> SimplePwm<'d, T> {
     ///
     /// Note:
     /// The DMA channel provided does not need to correspond to the requested channel.
-    pub async fn waveform<C: TimerChannel, W: Word + Into<T::Word>>(
+    pub async fn waveform<C: TimerChannel, W: Word + Into<T::Word>, D: super::Dma<T, C>>(
         &mut self,
-        dma: Peri<'_, impl super::Dma<T, C>>,
+        dma: Peri<'_, D>,
+        irq: impl crate::interrupt::typelevel::Binding<D::Interrupt, crate::dma::InterruptHandler<D>> + '_,
         channel: Channel,
         duty: &[W],
     ) {
@@ -432,7 +463,7 @@ impl<'d, T: GeneralInstance4Channel> SimplePwm<'d, T> {
         self.inner.clamp_compare_value::<W>(channel);
         self.inner.set_cc_dma_selection(Ccds::ON_UPDATE);
         self.inner.set_cc_dma_enable_state(C::CHANNEL, true);
-        self.inner.setup_channel_update_dma(dma, channel, duty).await;
+        self.inner.setup_channel_update_dma(dma, irq, channel, duty).await;
         self.inner.set_cc_dma_enable_state(C::CHANNEL, false);
     }
 
@@ -442,16 +473,17 @@ impl<'d, T: GeneralInstance4Channel> SimplePwm<'d, T> {
     /// You will need to provide corresponding `TIMx_UP` DMA channel to use this method.
     /// Also be aware that embassy timers use one of timers internally. It is possible to
     /// switch this timer by using `time-driver-timX` feature.
-    pub async fn waveform_up<W: Word + Into<T::Word>>(
+    pub async fn waveform_up<W: Word + Into<T::Word>, D: super::UpDma<T>>(
         &mut self,
-        dma: Peri<'_, impl super::UpDma<T>>,
+        dma: Peri<'_, D>,
+        irq: impl crate::interrupt::typelevel::Binding<D::Interrupt, crate::dma::InterruptHandler<D>> + '_,
         channel: Channel,
         duty: &[W],
     ) {
         self.inner.enable_channel(channel, true);
         self.inner.clamp_compare_value::<W>(channel);
         self.inner.enable_update_dma(true);
-        self.inner.setup_update_dma(dma, channel, duty).await;
+        self.inner.setup_update_dma(dma, irq, channel, duty).await;
         self.inner.enable_update_dma(false);
     }
 
@@ -484,9 +516,10 @@ impl<'d, T: GeneralInstance4Channel> SimplePwm<'d, T> {
     /// Also be aware that embassy timers use one of timers internally. It is possible to
     /// switch this timer by using `time-driver-timX` feature.
     ///
-    pub async fn waveform_up_multi_channel<W: Word + Into<T::Word>>(
+    pub async fn waveform_up_multi_channel<W: Word + Into<T::Word>, D: super::UpDma<T>>(
         &mut self,
-        dma: Peri<'_, impl super::UpDma<T>>,
+        dma: Peri<'_, D>,
+        irq: impl crate::interrupt::typelevel::Binding<D::Interrupt, crate::dma::InterruptHandler<D>> + '_,
         starting_channel: Channel,
         ending_channel: Channel,
         duty: &[W],
@@ -501,7 +534,7 @@ impl<'d, T: GeneralInstance4Channel> SimplePwm<'d, T> {
             });
         self.inner.enable_update_dma(true);
         self.inner
-            .setup_update_dma_burst(dma, starting_channel, ending_channel, duty)
+            .setup_update_dma_burst(dma, irq, starting_channel, ending_channel, duty)
             .await;
         self.inner.enable_update_dma(false);
     }

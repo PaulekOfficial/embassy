@@ -4,21 +4,29 @@
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::adc::{Adc, AdcChannel, AnyAdcChannel, Resolution, SampleTime};
-use embassy_stm32::peripherals::ADC1;
+use embassy_stm32::peripherals::{ADC1, DMA1_CH1};
+use embassy_stm32::{bind_interrupts, dma};
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
+
+bind_interrupts!(struct Irqs {
+    DMA1_CHANNEL1 => dma::InterruptHandler<DMA1_CH1>;
+});
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     let config = Default::default();
-    let p = embassy_stm32::init(config);
+    let mut p = embassy_stm32::init(config);
 
     info!("ADC STM32C0 example.");
 
     // We need to set certain sample time to be able to read temp sensor.
     let mut adc = Adc::new(p.ADC1, Resolution::BITS12);
-    let mut temp = adc.enable_temperature().degrade_adc();
-    let mut vref = adc.enable_vrefint().degrade_adc();
+    let mut temperature = adc.enable_temperature();
+    let mut vrefint = adc.enable_vrefint();
+
+    let mut temp = temperature.degrade_adc();
+    let mut vref = vrefint.degrade_adc();
     let mut pin0 = p.PA0.degrade_adc();
 
     let mut dma = p.DMA1_CH1;
@@ -39,7 +47,7 @@ async fn main(_spawner: Spawner) {
             (&mut temp, SampleTime::CYCLES12_5),
             (&mut pin0, SampleTime::CYCLES12_5),
         ];
-        adc.read(dma.reborrow(), channels_sequence.into_iter(), &mut read_buffer)
+        adc.read(dma.reborrow(), Irqs, channels_sequence.into_iter(), &mut read_buffer)
             .await;
         // Values are ordered according to hardware ADC channel number!
         info!(
