@@ -748,7 +748,11 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     }
 
     pub(crate) async fn read_information<'d>(&mut self) -> Result<Information<'d>, Error> {
-        if self.len <= 24 {
+        // Reject only frames that don't fit the buffer below. The condition was
+        // inverted (`<= 24`), which rejected every real control frame (MSC etc.,
+        // ~4-7 bytes); the caller then `continue`d without consuming the frame,
+        // desyncing the mux (the IgnoreFrame storm during PPP).
+        if self.len > 24 {
             return Err(Error::MalformedFrame);
         }
 
