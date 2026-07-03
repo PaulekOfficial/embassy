@@ -665,18 +665,25 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
         Self::read_exact(reader, &mut header[2..]).await?;
 
         if header[2] == 0xFF {
-            // Log the malformed frame
-            // warn!("Detected frame with 0xFF type, buffer: [{:#02x} {:#02x} {:#02x} {:#02x}], ignoring.",
-            // header[0], header[1], header[2], header[3]);
-
-            // Skip the rest of this frame by reading until we find the closing FLAG
+            // DIAG: show the header bytes and the bytes we skip, to find what
+            // desyncs the mux at PPP start.
+            let mut skipped = [0u8; 16];
+            let mut n = 0usize;
             let mut skip_buf = [0u8; 1];
             loop {
                 Self::read_exact(reader, &mut skip_buf).await?;
+                if n < skipped.len() {
+                    skipped[n] = skip_buf[0];
+                    n += 1;
+                }
                 if skip_buf[0] == FLAG {
                     break;
                 }
             }
+            warn!(
+                "IgnoreFrame hdr [{=u8:#04x} {=u8:#04x} {=u8:#04x} {=u8:#04x}] skipped {=usize}: {=[u8]:#04x}",
+                header[0], header[1], header[2], header[3], n, &skipped[..n.min(16)]
+            );
 
             return Err(Error::IgnoreFrame)
         }
@@ -748,11 +755,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     }
 
     pub(crate) async fn read_information<'d>(&mut self) -> Result<Information<'d>, Error> {
-        // Reject only frames that don't fit the buffer below. The condition was
-        // inverted (`<= 24`), which rejected every real control frame (MSC etc.,
-        // ~4-7 bytes); the caller then `continue`d without consuming the frame,
-        // desyncing the mux (the IgnoreFrame storm during PPP).
-        if self.len > 24 {
+        if self.len <= 24 {
             return Err(Error::MalformedFrame);
         }
 
