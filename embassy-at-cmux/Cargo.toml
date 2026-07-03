@@ -38,6 +38,7 @@ embassy-sync = { version = "0.8.0" }
 crc = "3.3.0"
 
 [dev-dependencies]
+embassy-time = { version = "0.5.0", features = ["generic-queue-8", "std"] }
 tokio = { version = "1.47.1", features = ["rt", "macros"] }
 
 [package.metadata.embassy_docs]

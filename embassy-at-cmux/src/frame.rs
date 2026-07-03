@@ -664,30 +664,6 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
 
         Self::read_exact(reader, &mut header[2..]).await?;
 
-        if header[2] == 0xFF {
-            // DIAG: show the header bytes and the bytes we skip, to find what
-            // desyncs the mux at PPP start.
-            let mut skipped = [0u8; 16];
-            let mut n = 0usize;
-            let mut skip_buf = [0u8; 1];
-            loop {
-                Self::read_exact(reader, &mut skip_buf).await?;
-                if n < skipped.len() {
-                    skipped[n] = skip_buf[0];
-                    n += 1;
-                }
-                if skip_buf[0] == FLAG {
-                    break;
-                }
-            }
-            warn!(
-                "IgnoreFrame hdr [{=u8:#04x} {=u8:#04x} {=u8:#04x} {=u8:#04x}] skipped {=usize}: {=[u8]:#04x}",
-                header[0], header[1], header[2], header[3], n, &skipped[..n.min(16)]
-            );
-
-            return Err(Error::IgnoreFrame)
-        }
-
         let frame_type = match FrameType::try_from(header[2]) {
             Ok(frame_type) => frame_type,
             Err(err) => {
@@ -755,7 +731,7 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
     }
 
     pub(crate) async fn read_information<'d>(&mut self) -> Result<Information<'d>, Error> {
-        if self.len <= 24 {
+        if self.len > 24 {
             return Err(Error::MalformedFrame);
         }
 
@@ -1072,6 +1048,30 @@ mod tests {
                 126
             ]
         )
+    }
+
+    #[tokio::test]
+    async fn decode_poll_uih_modem_status_command() {
+        // Captured from a BG95. 0xFF is UIH (0xEF) with the P/F bit set,
+        // not an invalid frame type.
+        let data = [0xF9, 0x01, 0xFF, 0x09, 0xE3, 0x05, 0x0B, 0x49, 0x8F, 0xF9];
+        let mut reader = &data[..];
+
+        let mut header = RxHeader::read(&mut reader, false).await.unwrap();
+        assert_eq!(header.frame_type, FrameType::Uih);
+        assert!(header.is_control());
+        assert_eq!(header.len, 4);
+
+        let information = header.read_information().await.unwrap();
+        let Information::ModemStatusCommand(msc) = information else {
+            panic!("expected a modem status command");
+        };
+        assert_eq!(msc.cr, CR::Command);
+        assert_eq!(msc.dlci, 2);
+        assert!(msc.control.rtr());
+        assert!(msc.control.ic());
+
+        header.finalize().await.unwrap();
     }
 
     #[cfg(test)]
