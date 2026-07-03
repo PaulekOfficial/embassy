@@ -694,7 +694,10 @@ impl<'a, R: embedded_io_async::BufRead> RxHeader<'a, R> {
         fcs.update(&header[1..]);
 
         let mut len = (header[3] >> 1) as usize;
-        if (header[2] & EA) != EA {
+        // The EA bit lives in the LENGTH octet (header[3]), not the control byte.
+        // If it is clear, a second length byte follows (info >= 128 bytes, e.g. PPP
+        // data frames). Checking header[2] here never read it, desyncing the mux.
+        if (header[3] & EA) != EA {
             let mut l2 = [0u8; 1];
             Self::read_exact(reader, &mut l2).await?;
             fcs.update(&l2);
