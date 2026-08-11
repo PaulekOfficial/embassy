@@ -10,7 +10,7 @@ mod frame;
 use core::cell::Cell;
 use core::future::{poll_fn, Future};
 use core::mem::MaybeUninit;
-use core::pin::pin;
+use core::pin::Pin;
 use core::task::Poll;
 
 use embassy_futures::select::{select, select3, select_slice, Either, Either3};
@@ -197,8 +197,15 @@ impl<'a, const N: usize, const BUF: usize> Runner<'a, N, BUF> {
 
             //let ping_fut = Timer::at(last_received + Duration::from_secs(5 * ping_number as u64));
 
+            // `pin!(futs.as_mut_slice())` used to yield `Pin<&mut [Fut]>` because the
+            // `&mut &mut [Fut]` inside the macro deref-coerced; newer `pin!` expansions
+            // pin the expression's exact type instead, giving `Pin<&mut &mut [Fut]>`.
+            // SAFETY: `futs` is a local of this loop iteration. It is never moved while
+            // the pinned slice is alive - it is only dropped after this `select` ends.
+            let futs_pin = unsafe { Pin::new_unchecked(futs.as_mut_slice()) };
+
             match select(
-                select_slice(pin!(futs.as_mut_slice())),
+                select_slice(futs_pin),
                 frame::RxHeader::read(&mut port_r, last_frame_malformed),
                 //ping_fut,
             )
