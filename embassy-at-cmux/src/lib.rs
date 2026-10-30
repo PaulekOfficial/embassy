@@ -421,7 +421,13 @@ async fn tx_loop<const N: usize, const BUF: usize, W: embedded_io_async::Write>(
             continue;
         }
 
-        let (buf, j) = select_slice(Pin::new(futs.as_mut_slice())).await;
+        // `futs` only covers lines open right now; rebuild when RX opens/closes a line or changes FC,
+        // otherwise channels opened after this point are never polled.
+        fc_changed.reset();
+        let (buf, j) = match select(select_slice(Pin::new(futs.as_mut_slice())), fc_changed.wait()).await {
+            Either::First(ready) => ready,
+            Either::Second(()) => continue,
+        };
         let i = idx_map[j];
         let len = buf.len().min(max_frame_size);
 
@@ -1209,5 +1215,74 @@ mod tests {
         producer.grant((offset - 2) as u16).unwrap().commit((offset - 2) as u16);
         consumer.read().unwrap().release();
         assert!(producer.grant((max + 1) as u16).is_err());
+    }
+
+    /// UA replies for DLCI 0..=4 exactly as a BG95 sends them in one burst.
+    const UA_BURST: [u8; 30] = [
+        249, 3, 115, 1, 215, 249, 249, 7, 115, 1, 21, 249, 249, 11, 115, 1, 146, 249, 249, 15, 115, 1, 80, 249, 249,
+        19, 115, 1, 93, 249,
+    ];
+
+    struct Port(&'static [u8]);
+
+    impl embedded_io_async::ErrorType for Port {
+        type Error = embedded_io_async::ErrorKind;
+    }
+
+    impl embedded_io_async::Read for Port {
+        async fn read(&mut self, _buf: &mut [u8]) -> Result<usize, Self::Error> {
+            unreachable!("runner reads through BufRead")
+        }
+    }
+
+    impl embedded_io_async::BufRead for Port {
+        async fn fill_buf(&mut self) -> Result<&[u8], Self::Error> {
+            if self.0.is_empty() {
+                core::future::pending::<()>().await;
+            }
+            Ok(self.0)
+        }
+
+        fn consume(&mut self, amt: usize) {
+            self.0 = &self.0[amt..];
+        }
+    }
+
+    struct Sink(std::rc::Rc<core::cell::RefCell<std::vec::Vec<u8>>>);
+
+    impl embedded_io_async::ErrorType for Sink {
+        type Error = embedded_io_async::ErrorKind;
+    }
+
+    impl embedded_io_async::Write for Sink {
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            self.0.borrow_mut().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn tx_reaches_channel_opened_after_the_first() {
+        use embedded_io_async::Write as _;
+
+        let mut mux = Mux::<4, 256>::new();
+        let (mut runner, channels) = mux.start();
+        let [_c1, mut c2, _c3, _c4] = channels;
+        let sent = std::rc::Rc::new(core::cell::RefCell::new(std::vec::Vec::new()));
+
+        let run = runner.run(Port(&UA_BURST), Sink(sent.clone()), 127);
+        let client = async {
+            c2.write_all(b"AT\r").await.unwrap();
+            for _ in 0..100 {
+                tokio::task::yield_now().await;
+            }
+        };
+        let _ = select(run, client).await;
+
+        assert!(sent.borrow().windows(3).any(|w| w == b"AT\r"), "AT on DLCI 2 never sent");
     }
 }
